@@ -5,7 +5,7 @@ import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
-# .env 파일 로드
+# .env 파일 로드 (로컬 실행 시)
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -121,11 +121,12 @@ def main():
     is_dry_run = "--dry-run" in sys.argv or "--test" in sys.argv
 
     if not is_dry_run and (not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID):
-        print("❌ 오류: TELEGRAM_BOT_TOKEN 및 TELEGRAM_CHAT_ID가 .env 파일에 설정되지 않았습니다.")
-        print("💡 .env 파일 생성 방법:")
-        print("TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN")
-        print("TELEGRAM_CHAT_ID=YOUR_CHAT_ID")
-        print("\n(테스트 실행을 원하시면 '.venv/bin/python stock_telegram_bot.py --dry-run' 을 실행하세요.)")
+        print("❌ 오류: TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 값이 설정되지 않았습니다.")
+        print(f"  • BOT_TOKEN 존재 여부: {'있음' if TELEGRAM_BOT_TOKEN else '없음(빈 값)'}")
+        print(f"  • CHAT_ID 존재 여부: {'있음' if TELEGRAM_CHAT_ID else '없음(빈 값)'}")
+        print("\n💡 해결 방법:")
+        print("1) GitHub 사용 시: Settings -> Secrets and variables -> Actions -> 'Repository secrets' 항목에 두 Secret을 등록해 주세요.")
+        print("2) 로컬 사용 시: .env 파일에 TELEGRAM_BOT_TOKEN 및 TELEGRAM_CHAT_ID를 작성해 주세요.")
         sys.exit(1)
 
     print("🔍 주식 데이터 조회 중...")
