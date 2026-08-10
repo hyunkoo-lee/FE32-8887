@@ -55,6 +55,37 @@ def normalize_display_symbol(symbol):
         return symbol[:-3]
     return symbol
 
+def fetch_naver_stock_name(symbol_or_code):
+    """네이버 증권 API를 통해 국내 및 해외 주식의 공식 한글 종목명 조회"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    clean_code = symbol_or_code.replace('.KS', '').replace('.KQ', '').strip()
+    
+    # 1. 국내 주식/ETF (6자리 숫자)
+    if clean_code.isdigit():
+        try:
+            url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                name = res.json().get('stockName')
+                if name:
+                    return name
+        except Exception:
+            pass
+
+    # 2. 해외 주식 (api.stock.naver.com)
+    for suffix in ['.O', '.N', '.A', '']:
+        try:
+            url = f"https://api.stock.naver.com/stock/{clean_code}{suffix}/basic"
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                name = res.json().get('stockName')
+                if name:
+                    return name
+        except Exception:
+            pass
+
+    return None
+
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
     sheet_id = extract_sheet_id(sheet_url_or_id)
     if not sheet_id:
@@ -83,14 +114,18 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
                 continue
 
             symbol = normalize_ticker_symbol(raw_symbol)
-            name = row[1].strip() if len(row) > 1 and row[1].strip() else symbol
+            sheet_name = row[1].strip() if len(row) > 1 and row[1].strip() else None
             strategy = row[2].strip() if len(row) > 2 and row[2].strip() else "지정된 메모 없음"
+
+            # 네이버 증권에서 한글 종목명 조회 (실패 시 구글시트명 -> 심볼 순)
+            naver_name = fetch_naver_stock_name(symbol)
+            final_name = naver_name or sheet_name or symbol
 
             tickers.append({
                 "symbol": symbol,
                 "raw_symbol": raw_symbol,
                 "display_symbol": normalize_display_symbol(symbol),
-                "name": name,
+                "name": final_name,
                 "strategy_summary": strategy
             })
 
@@ -216,12 +251,12 @@ def format_telegram_message(stock_results):
 
             # 아이콘 규칙: 
             #   플러스(+) = 빨강 삼각형 (🔺)
-            #   마이너스(-) = 선명한 파란색 동그라미 (🔵) -> Apple/안드로이드 모두 파란색 보장
+            #   마이너스(-) = 파랑 역삼각형 (🔻)
             #   보합(0%) = 노랑 동그라미 (🟡)
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
-                icon = "🔵"
+                icon = "🔻"
             else:
                 icon = "🟡"
 
@@ -260,7 +295,7 @@ def format_telegram_message(stock_results):
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
-                icon = "🔵"
+                icon = "🔻"
             else:
                 icon = "🟡"
 
@@ -311,7 +346,15 @@ def main():
     
     if not target_tickers:
         print("📌 기본 설정된 종목 목록을 사용합니다.")
-        target_tickers = DEFAULT_TARGET_TICKERS
+        for item in DEFAULT_TARGET_TICKERS:
+            naver_name = fetch_naver_stock_name(item['symbol'])
+            final_name = naver_name or item['name']
+            target_tickers.append({
+                "symbol": item['symbol'],
+                "display_symbol": normalize_display_symbol(item['symbol']),
+                "name": final_name,
+                "strategy_summary": item['strategy_summary']
+            })
 
     print(f"🔍 총 {len(target_tickers)}개 종목 데이터 조회 중...")
     results = []
