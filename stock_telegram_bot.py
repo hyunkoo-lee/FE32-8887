@@ -17,17 +17,17 @@ GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 DEFAULT_TARGET_TICKERS = [
     {
         "symbol": "SCHD",
-        "name": "Schwab U.S. Dividend Equity ETF",
+        "name": "슈왑 미국 배당 ETF",
         "strategy_summary": "우량 배당성장주 지속 보유. 적립식 분할 매수 유효."
     },
     {
         "symbol": "QLD",
-        "name": "ProShares Ultra QQQ (2x Leverage)",
+        "name": "프로스프레드 나스닥 2배",
         "strategy_summary": "나스닥 100 2배 추종. 단기 모멘텀 대응 유효하며 장기 보유 시 음의 복리 효과 주의."
     },
     {
         "symbol": "NU",
-        "name": "Nu Holdings Ltd.",
+        "name": "누홀딩스",
         "strategy_summary": "멕시코 정식 은행 라이선스 취득으로 장기 펀더멘털 양호. 8월 13일 실적 발표 전 변동성 유의하며 실적 확인 후 관망 매수 권장."
     }
 ]
@@ -47,6 +47,12 @@ def normalize_ticker_symbol(symbol):
         symbol = symbol[:-3] + ".KS"
     elif len(symbol) == 6 and symbol.isdigit():
         symbol = symbol + ".KS"
+    return symbol
+
+def normalize_display_symbol(symbol):
+    """표시용 종목코드 정돈 (441800.KS -> 441800)"""
+    if symbol.endswith(".KS") or symbol.endswith(".KQ"):
+        return symbol[:-3]
     return symbol
 
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
@@ -83,6 +89,7 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
             tickers.append({
                 "symbol": symbol,
                 "raw_symbol": raw_symbol,
+                "display_symbol": normalize_display_symbol(symbol),
                 "name": name,
                 "strategy_summary": strategy
             })
@@ -158,7 +165,6 @@ def pad_str(text, target_width, align="left"):
     """한글 가독성을 고려한 문자열 패딩 함수"""
     curr_w = get_display_width(text)
     if curr_w >= target_width:
-        # 너비 초과 시 자르기
         res = ""
         w = 0
         for ch in text:
@@ -189,30 +195,33 @@ def format_telegram_message(stock_results):
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n\n"
 
-    # --- 1. 표(Table) 요약 브리핑 ---
-    msg += "<b>📈 종목별 수익률 요약 표</b>\n"
+    # --- 1. 표(Table) 요약 브리핑 (종목코드, 종목명, 종가, 수익률) ---
+    msg += "<b>📈 종목별 시세 요약 표</b>\n"
     msg += "<pre>"
-    msg += "┌──────────────┬───────────┬───────────┐\n"
-    msg += "│ 종목명       │ 현재종가   │ 수익률    │\n"
-    msg += "├──────────────┼───────────┼───────────┤\n"
+    msg += "┌──────────┬───────────┬──────────┬──────────┐\n"
+    msg += "│ 종목코드 │ 종목명    │ 종가     │ 수익률   │\n"
+    msg += "├──────────┼───────────┼──────────┼──────────┤\n"
 
     for item in stock_results:
+        disp_symbol = item.get('display_symbol', item['symbol'])
         name = item['name']
         data = item['data']
-        
-        # 이름 길이 줄이기
-        short_name = name[:7]
-        name_cell = pad_str(short_name, 12, "left")
+
+        code_cell = pad_str(disp_symbol[:8], 8, "left")
+        name_cell = pad_str(name[:5], 9, "left")
 
         if data:
             curr = data.get("currency", "$")
             pct = data['change_pct']
 
-            # 아이콘 규칙: + = 빨강 삼각형(🔺), - = 파랑 역삼각형(🔻), 0 = 노랑 동그라미(🟡)
+            # 아이콘 규칙: 
+            #   플러스(+) = 빨강 삼각형 (🔺)
+            #   마이너스(-) = 선명한 파란색 동그라미 (🔵) -> Apple/안드로이드 모두 파란색 보장
+            #   보합(0%) = 노랑 동그라미 (🟡)
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
-                icon = "🔻"
+                icon = "🔵"
             else:
                 icon = "🟡"
 
@@ -222,15 +231,15 @@ def format_telegram_message(stock_results):
                 price_str = f"${data['close']:.2f}"
 
             pct_str = f"{icon}{pct:+.2f}%"
-            price_cell = pad_str(price_str, 9, "right")
-            pct_cell = pad_str(pct_str, 9, "right")
+            price_cell = pad_str(price_str, 8, "right")
+            pct_cell = pad_str(pct_str, 8, "right")
         else:
-            price_cell = pad_str("조회실패", 9, "right")
-            pct_cell = pad_str("-", 9, "right")
+            price_cell = pad_str("조회실패", 8, "right")
+            pct_cell = pad_str("-", 8, "right")
 
-        msg += f"│ {name_cell} │ {price_cell} │ {pct_cell} │\n"
+        msg += f"│ {code_cell} │ {name_cell} │ {price_cell} │ {pct_cell} │\n"
 
-    msg += "└──────────────┴───────────┴───────────┘\n"
+    msg += "└──────────┴───────────┴──────────┴──────────┘\n"
     msg += "</pre>\n\n"
 
     # --- 2. 종목별 상세 카드 뷰 ---
@@ -238,11 +247,12 @@ def format_telegram_message(stock_results):
 
     for item in stock_results:
         symbol = item['symbol']
+        disp_symbol = item.get('display_symbol', symbol)
         name = item['name']
         data = item['data']
         strategy = item['strategy_summary']
 
-        msg += f"▪️ <b>{name} ({symbol})</b>\n"
+        msg += f"▪️ <b>{name} ({disp_symbol})</b>\n"
         if data:
             curr = data.get("currency", "$")
             pct = data['change_pct']
@@ -250,7 +260,7 @@ def format_telegram_message(stock_results):
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
-                icon = "🔻"
+                icon = "🔵"
             else:
                 icon = "🟡"
 
@@ -300,7 +310,7 @@ def main():
         target_tickers = fetch_tickers_from_google_sheet(GOOGLE_SHEET_URL)
     
     if not target_tickers:
-        print("📌 기본 설정된 종목 목록(SCHD, QLD, NU)을 사용합니다.")
+        print("📌 기본 설정된 종목 목록을 사용합니다.")
         target_tickers = DEFAULT_TARGET_TICKERS
 
     print(f"🔍 총 {len(target_tickers)}개 종목 데이터 조회 중...")
@@ -309,6 +319,7 @@ def main():
         data = get_stock_data(item['symbol'])
         results.append({
             "symbol": item['symbol'],
+            "display_symbol": item.get('display_symbol', item['symbol']),
             "name": item['name'],
             "strategy_summary": item['strategy_summary'],
             "data": data
