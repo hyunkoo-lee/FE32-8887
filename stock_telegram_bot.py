@@ -43,6 +43,15 @@ def extract_sheet_id(url_or_id):
         return sheet_id
     return url_or_id.strip()
 
+def normalize_ticker_symbol(symbol):
+    """Yahoo Finance에 맞게 티커 기호 보정 (.KR -> .KS, 6자리 숫자 -> 6자리숫자.KS)"""
+    symbol = symbol.strip().upper()
+    if symbol.endswith(".KR"):
+        symbol = symbol[:-3] + ".KS"
+    elif len(symbol) == 6 and symbol.isdigit():
+        symbol = symbol + ".KS"
+    return symbol
+
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
     """구글 시트 CSV 공개 링크를 통해 종목 및 메모 수집"""
     sheet_id = extract_sheet_id(sheet_url_or_id)
@@ -63,20 +72,22 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
         for row in reader:
             if not row or len(row) == 0:
                 continue
-            symbol = row[0].strip().upper()
+            raw_symbol = row[0].strip()
             
             # 헤더 행 스킵 (Symbol, 티커, 종목코드 등)
-            if symbol in ["SYMBOL", "TICKER", "티커", "종목코드", "종목"]:
+            if raw_symbol.upper() in ["SYMBOL", "TICKER", "티커", "종목코드", "종목"]:
                 continue
             
-            if not symbol:
+            if not raw_symbol:
                 continue
 
+            symbol = normalize_ticker_symbol(raw_symbol)
             name = row[1].strip() if len(row) > 1 and row[1].strip() else symbol
             strategy = row[2].strip() if len(row) > 2 and row[2].strip() else "지정된 메모 없음"
 
             tickers.append({
                 "symbol": symbol,
+                "raw_symbol": raw_symbol,
                 "name": name,
                 "strategy_summary": strategy
             })
@@ -91,6 +102,13 @@ def get_stock_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="5d")
+        
+        # .KS로 실패 시 .KQ(코스닥)로 시도
+        if df.empty and symbol.endswith(".KS"):
+            kq_symbol = symbol[:-3] + ".KQ"
+            ticker = yf.Ticker(kq_symbol)
+            df = ticker.history(period="5d")
+
         if df.empty:
             return None
         
@@ -126,6 +144,7 @@ def get_stock_data(symbol):
             "close": close_price,
             "change_pct": change_pct,
             "volume": volume,
+            "currency": "₩" if (symbol.endswith(".KS") or symbol.endswith(".KQ")) else "$",
             "news": news_items
         }
     except Exception as e:
@@ -144,7 +163,7 @@ def format_telegram_message(stock_results):
     if not latest_date:
         latest_date = datetime.date.today().strftime('%Y-%m-%d')
     
-    msg = f"<b>📊 [미국 주식 시가/종가 및 방향성 리포트]</b>\n"
+    msg = f"<b>📊 [주식 시가/종가 및 방향성 리포트]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n\n"
 
     for item in stock_results:
@@ -153,12 +172,19 @@ def format_telegram_message(stock_results):
         data = item['data']
         strategy = item['strategy_summary']
 
-        msg += f"<b>🔹 {symbol} ({name})</b>\n"
+        msg += f"<b>🔹 {name} ({symbol})</b>\n"
         if data:
+            curr = data.get("currency", "$")
             change_emoji = "🔺" if data['change_pct'] >= 0 else "🔻"
-            msg += f"• <b>시가(Open):</b> ${data['open']:.2f}\n"
-            msg += f"• <b>종가(Close):</b> ${data['close']:.2f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
-            msg += f"• <b>당일 변동:</b> ${data['low']:.2f} ~ ${data['high']:.2f}\n"
+            
+            if curr == "₩":
+                msg += f"• <b>시가(Open):</b> {curr}{data['open']:,.0f}\n"
+                msg += f"• <b>종가(Close):</b> {curr}{data['close']:,.0f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
+                msg += f"• <b>당일 변동:</b> {curr}{data['low']:,.0f} ~ {curr}{data['high']:,.0f}\n"
+            else:
+                msg += f"• <b>시가(Open):</b> {curr}{data['open']:.2f}\n"
+                msg += f"• <b>종가(Close):</b> {curr}{data['close']:.2f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
+                msg += f"• <b>당일 변동:</b> {curr}{data['low']:.2f} ~ {curr}{data['high']:.2f}\n"
         else:
             msg += f"• 주가 데이터를 조회할 수 없습니다.\n"
 
