@@ -1,5 +1,7 @@
 import os
 import sys
+import csv
+import io
 import datetime
 import requests
 import yfinance as yf
@@ -10,8 +12,10 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 
-TARGET_TICKERS = [
+# 구글 시트 연동이 없을 때 사용하는 기본 종목 리스트
+DEFAULT_TARGET_TICKERS = [
     {
         "symbol": "SCHD",
         "name": "Schwab U.S. Dividend Equity ETF",
@@ -29,52 +33,116 @@ TARGET_TICKERS = [
     }
 ]
 
-def get_stock_data(symbol):
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(period="5d")
-    if df.empty:
+def extract_sheet_id(url_or_id):
+    """구글 시트 URL에서 Sheet ID 추출"""
+    if not url_or_id:
         return None
-    
-    latest_row = df.iloc[-1]
-    date_str = latest_row.name.strftime('%Y-%m-%d')
-    
-    open_price = float(latest_row['Open'])
-    high_price = float(latest_row['High'])
-    low_price = float(latest_row['Low'])
-    close_price = float(latest_row['Close'])
-    volume = int(latest_row['Volume'])
-    
-    prev_close = float(df.iloc[-2]['Close']) if len(df) > 1 else close_price
-    change_pct = ((close_price - prev_close) / prev_close) * 100
+    if "/d/" in url_or_id:
+        parts = url_or_id.split("/d/")[1]
+        sheet_id = parts.split("/")[0]
+        return sheet_id
+    return url_or_id.strip()
 
-    # 최근 뉴스 가져오기 (최대 2건)
-    news_items = []
+def fetch_tickers_from_google_sheet(sheet_url_or_id):
+    """구글 시트 CSV 공개 링크를 통해 종목 및 메모 수집"""
+    sheet_id = extract_sheet_id(sheet_url_or_id)
+    if not sheet_id:
+        return []
+
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     try:
-        raw_news = ticker.news
-        if raw_news:
-            for item in raw_news[:2]:
-                title = item.get("title") or item.get("content", {}).get("title")
-                if title:
-                    news_items.append(title)
-    except Exception:
-        pass
+        res = requests.get(csv_url, timeout=10)
+        if res.status_code != 200:
+            print(f"⚠️ 구글 시트 불러오기 실패 (HTTP {res.status_code})")
+            return []
 
-    return {
-        "date": date_str,
-        "open": open_price,
-        "high": high_price,
-        "low": low_price,
-        "close": close_price,
-        "change_pct": change_pct,
-        "volume": volume,
-        "news": news_items
-    }
+        csv_text = res.content.decode('utf-8')
+        reader = csv.reader(io.StringIO(csv_text))
+        
+        tickers = []
+        for row in reader:
+            if not row or len(row) == 0:
+                continue
+            symbol = row[0].strip().upper()
+            
+            # 헤더 행 스킵 (Symbol, 티커, 종목코드 등)
+            if symbol in ["SYMBOL", "TICKER", "티커", "종목코드", "종목"]:
+                continue
+            
+            if not symbol:
+                continue
+
+            name = row[1].strip() if len(row) > 1 and row[1].strip() else symbol
+            strategy = row[2].strip() if len(row) > 2 and row[2].strip() else "지정된 메모 없음"
+
+            tickers.append({
+                "symbol": symbol,
+                "name": name,
+                "strategy_summary": strategy
+            })
+
+        print(f"📊 구글 시트에서 총 {len(tickers)}개 종목을 가져왔습니다.")
+        return tickers
+    except Exception as e:
+        print(f"⚠️ 구글 시트 읽기 중 오류 발생: {e}")
+        return []
+
+def get_stock_data(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="5d")
+        if df.empty:
+            return None
+        
+        latest_row = df.iloc[-1]
+        date_str = latest_row.name.strftime('%Y-%m-%d')
+        
+        open_price = float(latest_row['Open'])
+        high_price = float(latest_row['High'])
+        low_price = float(latest_row['Low'])
+        close_price = float(latest_row['Close'])
+        volume = int(latest_row['Volume'])
+        
+        prev_close = float(df.iloc[-2]['Close']) if len(df) > 1 else close_price
+        change_pct = ((close_price - prev_close) / prev_close) * 100
+
+        # 최근 뉴스 가져오기 (최대 2건)
+        news_items = []
+        try:
+            raw_news = ticker.news
+            if raw_news:
+                for item in raw_news[:2]:
+                    title = item.get("title") or item.get("content", {}).get("title")
+                    if title:
+                        news_items.append(title)
+        except Exception:
+            pass
+
+        return {
+            "date": date_str,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+            "change_pct": change_pct,
+            "volume": volume,
+            "news": news_items
+        }
+    except Exception as e:
+        print(f"⚠️ {symbol} 데이터 조회 실패: {e}")
+        return None
 
 def format_telegram_message(stock_results):
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
 
-    latest_date = stock_results[0]['data']['date'] if stock_results[0]['data'] else datetime.date.today().strftime('%Y-%m-%d')
+    latest_date = None
+    for r in stock_results:
+        if r.get('data'):
+            latest_date = r['data']['date']
+            break
+    if not latest_date:
+        latest_date = datetime.date.today().strftime('%Y-%m-%d')
     
     msg = f"<b>📊 [미국 주식 시가/종가 및 방향성 리포트]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n\n"
@@ -94,7 +162,8 @@ def format_telegram_message(stock_results):
         else:
             msg += f"• 주가 데이터를 조회할 수 없습니다.\n"
 
-        msg += f"💡 <b>분석 및 방향성:</b> {strategy}\n"
+        if strategy and strategy != "지정된 메모 없음":
+            msg += f"💡 <b>메모/전략:</b> {strategy}\n"
 
         if data and data.get('news'):
             msg += "📰 <b>최근 주요 헤드라인:</b>\n"
@@ -122,16 +191,21 @@ def main():
 
     if not is_dry_run and (not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID):
         print("❌ 오류: TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 값이 설정되지 않았습니다.")
-        print(f"  • BOT_TOKEN 존재 여부: {'있음' if TELEGRAM_BOT_TOKEN else '없음(빈 값)'}")
-        print(f"  • CHAT_ID 존재 여부: {'있음' if TELEGRAM_CHAT_ID else '없음(빈 값)'}")
-        print("\n💡 해결 방법:")
-        print("1) GitHub 사용 시: Settings -> Secrets and variables -> Actions -> 'Repository secrets' 항목에 두 Secret을 등록해 주세요.")
-        print("2) 로컬 사용 시: .env 파일에 TELEGRAM_BOT_TOKEN 및 TELEGRAM_CHAT_ID를 작성해 주세요.")
         sys.exit(1)
 
-    print("🔍 주식 데이터 조회 중...")
+    # 구글 시트 연동 여부 확인
+    target_tickers = []
+    if GOOGLE_SHEET_URL:
+        print(f"📖 구글 시트에서 종목 목록 조회 중... ({GOOGLE_SHEET_URL})")
+        target_tickers = fetch_tickers_from_google_sheet(GOOGLE_SHEET_URL)
+    
+    if not target_tickers:
+        print("📌 기본 설정된 종목 목록(SCHD, QLD, NU)을 사용합니다.")
+        target_tickers = DEFAULT_TARGET_TICKERS
+
+    print(f"🔍 총 {len(target_tickers)}개 종목 데이터 조회 중...")
     results = []
-    for item in TARGET_TICKERS:
+    for item in target_tickers:
         data = get_stock_data(item['symbol'])
         results.append({
             "symbol": item['symbol'],
