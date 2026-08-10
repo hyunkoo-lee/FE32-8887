@@ -8,6 +8,13 @@ import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 # .env 파일 로드 (로컬 실행 시)
 load_dotenv()
 
@@ -32,6 +39,40 @@ DEFAULT_TARGET_TICKERS = [
         "strategy_summary": "멕시코 정식 은행 라이선스 취득으로 장기 펀더멘털 양호. 8월 13일 실적 발표 전 변동성 유의하며 실적 확인 후 관망 매수 권장."
     }
 ]
+
+def ensure_korean_font():
+    """ReportLab용 한글 폰트(NanumGothic) 준비"""
+    font_name = "NanumGothic"
+    bold_font_name = "NanumGothicBold"
+    
+    font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
+    bold_font_path = os.path.join(tempfile.gettempdir(), "NanumGothicBold.ttf")
+    
+    if not os.path.exists(font_path):
+        try:
+            res = requests.get("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf", timeout=10)
+            if res.status_code == 200:
+                with open(font_path, "wb") as f:
+                    f.write(res.content)
+        except Exception as e:
+            print(f"⚠️ 폰트 다운로드 실패: {e}")
+
+    if not os.path.exists(bold_font_path):
+        try:
+            res = requests.get("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf", timeout=10)
+            if res.status_code == 200:
+                with open(bold_font_path, "wb") as f:
+                    f.write(res.content)
+        except Exception as e:
+            print(f"⚠️ 볼드 폰트 다운로드 실패: {e}")
+
+    try:
+        pdfmetrics.registerFont(TTFont(font_name, font_path))
+        pdfmetrics.registerFont(TTFont(bold_font_name, bold_font_path))
+    except Exception as e:
+        print(f"⚠️ 폰트 등록 실패: {e}")
+
+    return font_name, bold_font_name
 
 def extract_sheet_id(url_or_id):
     if not url_or_id:
@@ -186,122 +227,180 @@ def get_stock_data(symbol):
         print(f"⚠️ {symbol} 데이터 조회 실패: {e}")
         return None
 
-def get_display_width(text):
-    """한글/한자 등 전각 문자를 2칸, 영문/숫자를 1칸으로 계산"""
-    width = 0
-    for ch in text:
-        if ord(ch) > 0x7F:
-            width += 2
-        else:
-            width += 1
-    return width
-
-def pad_str(text, target_width, align="left"):
-    """한글 가독성을 고려한 문자열 패딩 함수"""
-    curr_w = get_display_width(text)
-    if curr_w >= target_width:
-        res = ""
-        w = 0
-        for ch in text:
-            cw = 2 if ord(ch) > 0x7F else 1
-            if w + cw > target_width - 1:
-                break
-            res += ch
-            w += cw
-        return res + " " * (target_width - w)
+def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
+    """ReportLab을 사용하여 한 행에 모든 시세 정보가 출력되는 아름다운 가로형 PDF 생성"""
+    font_name, bold_font_name = ensure_korean_font()
     
-    pad_len = target_width - curr_w
-    if align == "right":
-        return " " * pad_len + text
-    return text + " " * pad_len
+    # A4 가로 페이지 (너비 842pt, 높이 595pt)
+    doc = SimpleDocTemplate(
+        pdf_filepath,
+        pagesize=landscape(A4),
+        leftMargin=30,
+        rightMargin=30,
+        topMargin=30,
+        bottomMargin=30
+    )
+    
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Normal'],
+        fontName=bold_font_name,
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor('#1E293B'),
+        spaceAfter=15
+    )
+    
+    sub_style = ParagraphStyle(
+        'DocSubTitle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor('#64748B'),
+        spaceAfter=12
+    )
 
-def generate_table_file_content(stock_results, latest_date):
-    """첨부 파일용 전체 시세 요약 표 텍스트 생성"""
-    lines = []
-    lines.append("==========================================================================================")
-    lines.append(f"📊 [주식 시가·종가 브리핑 요약 표] 📅 기준일자: {latest_date}")
-    lines.append("==========================================================================================")
-    lines.append("┌──────────┬────────────────────────────────────────┬──────────────┬──────────────┐")
-    lines.append("│ 종목코드 │ 종목명(한글)                           │ 현재종가     │ 수익률       │")
-    lines.append("├──────────┼────────────────────────────────────────┼──────────────┼──────────────┤")
+    hdr_style = ParagraphStyle(
+        'HdrCell',
+        parent=styles['Normal'],
+        fontName=bold_font_name,
+        fontSize=10,
+        leading=12,
+        textColor=colors.white,
+        alignment=1
+    )
+
+    cell_left = ParagraphStyle(
+        'CellLeft',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor('#1E293B')
+    )
+
+    cell_center = ParagraphStyle(
+        'CellCenter',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=9,
+        leading=12,
+        alignment=1,
+        textColor=colors.HexColor('#1E293B')
+    )
+
+    cell_right = ParagraphStyle(
+        'CellRight',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=9,
+        leading=12,
+        alignment=2,
+        textColor=colors.HexColor('#1E293B')
+    )
+
+    cell_bold_plus = ParagraphStyle(
+        'CellPlus',
+        parent=styles['Normal'],
+        fontName=bold_font_name,
+        fontSize=9,
+        leading=12,
+        alignment=2,
+        textColor=colors.HexColor('#DC2626') # 빨간색
+    )
+
+    cell_bold_minus = ParagraphStyle(
+        'CellMinus',
+        parent=styles['Normal'],
+        fontName=bold_font_name,
+        fontSize=9,
+        leading=12,
+        alignment=2,
+        textColor=colors.HexColor('#2563EB') # 파란색
+    )
+
+    table_data = [
+        [
+            Paragraph('종목코드', hdr_style),
+            Paragraph('종목명(한글)', hdr_style),
+            Paragraph('시가', hdr_style),
+            Paragraph('종가', hdr_style),
+            Paragraph('당일 변동 범위', hdr_style),
+            Paragraph('수익률', hdr_style),
+            Paragraph('메모 및 보유 전략', hdr_style)
+        ]
+    ]
 
     for item in stock_results:
         disp_symbol = item.get('display_symbol', item['symbol'])
         name = item['name']
         data = item['data']
-
-        code_cell = pad_str(disp_symbol, 8, "left")
-        name_cell = pad_str(name, 38, "left")
-
-        if data:
-            curr = data.get("currency", "$")
-            pct = data['change_pct']
-
-            # 아이콘 규칙: 
-            #   플러스(+) = 빨강 삼각형 (🔺)
-            #   마이너스(-) = 파랑 동그라미 (🔵)
-            #   보합(0%) = 노랑 동그라미 (🟡)
-            if pct > 0:
-                icon = "🔺"
-            elif pct < 0:
-                icon = "🔵"
-            else:
-                icon = "🟡"
-
-            if curr == "₩":
-                price_str = f"₩{data['close']:,.0f}"
-            else:
-                price_str = f"${data['close']:.2f}"
-
-            pct_str = f"{icon}{pct:+.2f}%"
-            price_cell = pad_str(price_str, 12, "right")
-            pct_cell = pad_str(pct_str, 12, "right")
-        else:
-            price_cell = pad_str("조회실패", 12, "right")
-            pct_cell = pad_str("-", 12, "right")
-
-        lines.append(f"│ {code_cell} │ {name_cell} │ {price_cell} │ {pct_cell} │")
-
-    lines.append("└──────────┴────────────────────────────────────────┴──────────────┴──────────────┘")
-    lines.append("")
-    lines.append("==========================================================================================")
-    lines.append("📋 종목별 상세 현황 및 메모")
-    lines.append("==========================================================================================")
-
-    for item in stock_results:
-        symbol = item['symbol']
-        disp_symbol = item.get('display_symbol', symbol)
-        name = item['name']
-        data = item['data']
         strategy = item['strategy_summary']
 
-        lines.append(f"▪️ {name} ({disp_symbol})")
         if data:
             curr = data.get("currency", "$")
             pct = data['change_pct']
-            icon = "🔺" if pct > 0 else ("🔵" if pct < 0 else "🟡")
 
             if curr == "₩":
-                lines.append(f"  • 종가: ₩{data['close']:,.0f} ({icon} {pct:+.2f}%)")
-                lines.append(f"  • 시가: ₩{data['open']:,.0f} | 범위: ₩{data['low']:,.0f} ~ ₩{data['high']:,.0f}")
+                open_str = f"₩{data['open']:,.0f}"
+                close_str = f"₩{data['close']:,.0f}"
+                range_str = f"₩{data['low']:,.0f} ~ ₩{data['high']:,.0f}"
             else:
-                lines.append(f"  • 종가: ${data['close']:.2f} ({icon} {pct:+.2f}%)")
-                lines.append(f"  • 시가: ${data['open']:.2f} | 범위: ${data['low']:.2f} ~ ${data['high']:.2f}")
+                open_str = f"${data['open']:.2f}"
+                close_str = f"${data['close']:.2f}"
+                range_str = f"${data['low']:.2f} ~ ${data['high']:.2f}"
+
+            if pct > 0:
+                pct_str = f"+{pct:.2f}%"
+                pct_paragraph = Paragraph(pct_str, cell_bold_plus)
+            elif pct < 0:
+                pct_str = f"{pct:.2f}%"
+                pct_paragraph = Paragraph(pct_str, cell_bold_minus)
+            else:
+                pct_str = f"{pct:.2f}%"
+                pct_paragraph = Paragraph(pct_str, cell_center)
         else:
-            lines.append("  • 주가 데이터를 조회할 수 없습니다.")
+            open_str = "-"
+            close_str = "조회실패"
+            range_str = "-"
+            pct_paragraph = Paragraph("-", cell_center)
 
-        if strategy and strategy != "지정된 메모 없음":
-            lines.append(f"  💡 메모: {strategy}")
+        table_data.append([
+            Paragraph(disp_symbol, cell_center),
+            Paragraph(name, cell_left),
+            Paragraph(open_str, cell_right),
+            Paragraph(close_str, cell_right),
+            Paragraph(range_str, cell_center),
+            pct_paragraph,
+            Paragraph(strategy, cell_left)
+        ])
 
-        if data and data.get('news'):
-            lines.append("  📰 최근 뉴스:")
-            for news_title in data['news']:
-                lines.append(f"    - {news_title}")
+    # 7개 컬럼 총 너비 = 782pt (Landscape A4 너비 842 - 여백 60)
+    col_widths = [75, 175, 75, 75, 125, 70, 187]
+    t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1E3A8A')),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#F8FAFC')]),
+        ('TOPPADDING', (0,0), (-1,-1), 7),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 7),
+    ]))
 
-        lines.append("")
+    elements = [
+        Paragraph(f"📊 [주식 시가·종가 종합 시세 리포트]", title_style),
+        Paragraph(f"📅 <b>기준일자:</b> {latest_date} | <b>생성시각:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", sub_style),
+        Spacer(1, 8),
+        t
+    ]
 
-    lines.append("⚠️ 본 리포트는 자동 생성되었으며 투자 참고용입니다.")
-    return "\n".join(lines)
+    doc.build(elements)
+    print(f"📄 PDF 리포트 생성 완료: {pdf_filepath}")
 
 def format_telegram_message(stock_results):
     if not stock_results:
@@ -317,7 +416,7 @@ def format_telegram_message(stock_results):
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n"
-    msg += f"📎 <i>상세 요약 표는 첨부된 텍스트 파일(.txt)을 열어 확인하실 수 있습니다.</i>\n\n"
+    msg += f"📎 <i>한눈에 들어오는 전체 종합 시세 표는 아래 첨부된 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
 
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
@@ -366,20 +465,6 @@ def format_telegram_message(stock_results):
     msg += "⚠️ <i>본 리포트는 자동 생성되었으며 투자 참고용입니다.</i>"
     return msg, latest_date
 
-def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None):
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    data = {"chat_id": chat_id, "parse_mode": "HTML"}
-    if caption:
-        data["caption"] = caption
-    try:
-        with open(file_path, "rb") as f:
-            files = {"document": (filename, f, "text/plain; charset=utf-8")}
-            res = requests.post(url, data=data, files=files)
-            return res.json()
-    except Exception as e:
-        print(f"⚠️ 파일 전송 중 오류: {e}")
-        return {"ok": False}
-
 def send_telegram_message(bot_token, chat_id, message):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
@@ -390,6 +475,20 @@ def send_telegram_message(bot_token, chat_id, message):
     }
     response = requests.post(url, data=payload)
     return response.json()
+
+def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None):
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    data = {"chat_id": chat_id, "parse_mode": "HTML"}
+    if caption:
+        data["caption"] = caption
+    try:
+        with open(file_path, "rb") as f:
+            files = {"document": (filename, f, "application/pdf")}
+            res = requests.post(url, data=data, files=files)
+            return res.json()
+    except Exception as e:
+        print(f"⚠️ PDF 파일 전송 중 오류: {e}")
+        return {"ok": False}
 
 def main():
     is_dry_run = "--dry-run" in sys.argv or "--test" in sys.argv
@@ -428,44 +527,40 @@ def main():
         })
 
     report_msg, latest_date = format_telegram_message(results)
-    table_content = generate_table_file_content(results, latest_date)
 
-    print("\n--- 생성된 요약 파일 내용 ---")
-    print(table_content)
-    print("---------------------------\n")
+    # 1. PDF 리포트 파일 생성
+    pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
+    pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
+    create_stock_pdf_report(results, latest_date, pdf_filepath)
 
     if is_dry_run:
-        print("🧪 Dry-run 모드입니다. 텔레그램 메시지를 실제로 전송하지 않았습니다.")
+        print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습니다.")
         return
 
-    # 1. 텍스트 임시 파일 작성
-    filename = f"주식_시세_요약표_{latest_date}.txt"
-    temp_file_path = os.path.join(tempfile.gettempdir(), filename)
-    with open(temp_file_path, "w", encoding="utf-8") as f:
-        f.write(table_content)
+    print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] PDF 문서 파일")
 
-    print("🚀 텔레그램 메세지 및 표 파일 전송 중...")
-    
-    # 2. 표 텍스트 파일 (.txt) 텔레그램 첨부파일로 전송
+    # 1. 메인 브리핑 메시지 먼저 전송 (FIRST)
+    msg_res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report_msg)
+    print(f"  • 메시지 전송 결과: {'성공' if msg_res.get('ok') else '실패'}")
+
+    # 2. PDF 요약 문서 파일 마지막으로 전송 (LAST)
     doc_res = send_telegram_document(
         TELEGRAM_BOT_TOKEN, 
         TELEGRAM_CHAT_ID, 
-        temp_file_path, 
-        filename, 
-        caption=f"<b>📊 주식 시세 요약 표 ({latest_date})</b>"
+        pdf_filepath, 
+        pdf_filename, 
+        caption=f"<b>📄 주식 시세 요약 표 PDF 문서 ({latest_date})</b>"
     )
+    print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
-    # 3. 메인 상세 카드 브리핑 메시지 전송
-    msg_res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report_msg)
-
-    if doc_res.get("ok") and msg_res.get("ok"):
-        print("✅ 텔레그램 파일 및 메시지 전송 성공!")
+    if msg_res.get("ok") and doc_res.get("ok"):
+        print("✅ 텔레그램 메세지 및 PDF 전송 완벽 성공!")
     else:
-        print(f"⚠️ 전송 결과: 파일={doc_res.get('ok')}, 메시지={msg_res.get('ok')}")
+        print(f"⚠️ 전송 결과: 메시지={msg_res.get('ok')}, PDF={doc_res.get('ok')}")
 
-    # 임시 파일 삭제
-    if os.path.exists(temp_file_path):
-        os.remove(temp_file_path)
+    # 임시 PDF 파일 삭제
+    if os.path.exists(pdf_filepath):
+        os.remove(pdf_filepath)
 
 if __name__ == "__main__":
     main()
