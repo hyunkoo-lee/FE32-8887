@@ -175,8 +175,15 @@ def format_telegram_message(stock_results):
         msg += f"<b>🔹 {name} ({symbol})</b>\n"
         if data:
             curr = data.get("currency", "$")
-            change_emoji = "🔺" if data['change_pct'] >= 0 else "🔻"
             
+            # 수익률 아이콘: 상승(+) = 빨강(🔴), 하락(-) = 파랑(🔵), 변동없음 = 흰색(⚪)
+            if data['change_pct'] > 0:
+                change_emoji = "🔴"
+            elif data['change_pct'] < 0:
+                change_emoji = "🔵"
+            else:
+                change_emoji = "⚪"
+
             if curr == "₩":
                 msg += f"• <b>시가(Open):</b> {curr}{data['open']:,.0f}\n"
                 msg += f"• <b>종가(Close):</b> {curr}{data['close']:,.0f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
