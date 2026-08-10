@@ -2,6 +2,7 @@ import os
 import sys
 import csv
 import io
+import tempfile
 import datetime
 import requests
 import yfinance as yf
@@ -117,7 +118,6 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
             sheet_name = row[1].strip() if len(row) > 1 and row[1].strip() else None
             strategy = row[2].strip() if len(row) > 2 and row[2].strip() else "지정된 메모 없음"
 
-            # 네이버 증권에서 한글 종목명 조회 (실패 시 구글시트명 -> 심볼 순)
             naver_name = fetch_naver_stock_name(symbol)
             final_name = naver_name or sheet_name or symbol
 
@@ -215,6 +215,94 @@ def pad_str(text, target_width, align="left"):
         return " " * pad_len + text
     return text + " " * pad_len
 
+def generate_table_file_content(stock_results, latest_date):
+    """첨부 파일용 전체 시세 요약 표 텍스트 생성"""
+    lines = []
+    lines.append("==========================================================================================")
+    lines.append(f"📊 [주식 시가·종가 브리핑 요약 표] 📅 기준일자: {latest_date}")
+    lines.append("==========================================================================================")
+    lines.append("┌──────────┬────────────────────────────────────────┬──────────────┬──────────────┐")
+    lines.append("│ 종목코드 │ 종목명(한글)                           │ 현재종가     │ 수익률       │")
+    lines.append("├──────────┼────────────────────────────────────────┼──────────────┼──────────────┤")
+
+    for item in stock_results:
+        disp_symbol = item.get('display_symbol', item['symbol'])
+        name = item['name']
+        data = item['data']
+
+        code_cell = pad_str(disp_symbol, 8, "left")
+        name_cell = pad_str(name, 38, "left")
+
+        if data:
+            curr = data.get("currency", "$")
+            pct = data['change_pct']
+
+            # 아이콘 규칙: 
+            #   플러스(+) = 빨강 삼각형 (🔺)
+            #   마이너스(-) = 파랑 동그라미 (🔵)
+            #   보합(0%) = 노랑 동그라미 (🟡)
+            if pct > 0:
+                icon = "🔺"
+            elif pct < 0:
+                icon = "🔵"
+            else:
+                icon = "🟡"
+
+            if curr == "₩":
+                price_str = f"₩{data['close']:,.0f}"
+            else:
+                price_str = f"${data['close']:.2f}"
+
+            pct_str = f"{icon}{pct:+.2f}%"
+            price_cell = pad_str(price_str, 12, "right")
+            pct_cell = pad_str(pct_str, 12, "right")
+        else:
+            price_cell = pad_str("조회실패", 12, "right")
+            pct_cell = pad_str("-", 12, "right")
+
+        lines.append(f"│ {code_cell} │ {name_cell} │ {price_cell} │ {pct_cell} │")
+
+    lines.append("└──────────┴────────────────────────────────────────┴──────────────┴──────────────┘")
+    lines.append("")
+    lines.append("==========================================================================================")
+    lines.append("📋 종목별 상세 현황 및 메모")
+    lines.append("==========================================================================================")
+
+    for item in stock_results:
+        symbol = item['symbol']
+        disp_symbol = item.get('display_symbol', symbol)
+        name = item['name']
+        data = item['data']
+        strategy = item['strategy_summary']
+
+        lines.append(f"▪️ {name} ({disp_symbol})")
+        if data:
+            curr = data.get("currency", "$")
+            pct = data['change_pct']
+            icon = "🔺" if pct > 0 else ("🔵" if pct < 0 else "🟡")
+
+            if curr == "₩":
+                lines.append(f"  • 종가: ₩{data['close']:,.0f} ({icon} {pct:+.2f}%)")
+                lines.append(f"  • 시가: ₩{data['open']:,.0f} | 범위: ₩{data['low']:,.0f} ~ ₩{data['high']:,.0f}")
+            else:
+                lines.append(f"  • 종가: ${data['close']:.2f} ({icon} {pct:+.2f}%)")
+                lines.append(f"  • 시가: ${data['open']:.2f} | 범위: ${data['low']:.2f} ~ ${data['high']:.2f}")
+        else:
+            lines.append("  • 주가 데이터를 조회할 수 없습니다.")
+
+        if strategy and strategy != "지정된 메모 없음":
+            lines.append(f"  💡 메모: {strategy}")
+
+        if data and data.get('news'):
+            lines.append("  📰 최근 뉴스:")
+            for news_title in data['news']:
+                lines.append(f"    - {news_title}")
+
+        lines.append("")
+
+    lines.append("⚠️ 본 리포트는 자동 생성되었으며 투자 참고용입니다.")
+    return "\n".join(lines)
+
 def format_telegram_message(stock_results):
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
@@ -228,56 +316,9 @@ def format_telegram_message(stock_results):
         latest_date = datetime.date.today().strftime('%Y-%m-%d')
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
-    msg += f"📅 기준일자: <code>{latest_date}</code>\n\n"
+    msg += f"📅 기준일자: <code>{latest_date}</code>\n"
+    msg += f"📎 <i>상세 요약 표는 첨부된 텍스트 파일(.txt)을 열어 확인하실 수 있습니다.</i>\n\n"
 
-    # --- 1. 표(Table) 요약 브리핑 (종목코드, 종목명, 종가, 수익률) ---
-    msg += "<b>📈 종목별 시세 요약 표</b>\n"
-    msg += "<pre>"
-    msg += "┌──────────┬───────────┬──────────┬──────────┐\n"
-    msg += "│ 종목코드 │ 종목명    │ 종가     │ 수익률   │\n"
-    msg += "├──────────┼───────────┼──────────┼──────────┤\n"
-
-    for item in stock_results:
-        disp_symbol = item.get('display_symbol', item['symbol'])
-        name = item['name']
-        data = item['data']
-
-        code_cell = pad_str(disp_symbol[:8], 8, "left")
-        name_cell = pad_str(name[:5], 9, "left")
-
-        if data:
-            curr = data.get("currency", "$")
-            pct = data['change_pct']
-
-            # 아이콘 규칙: 
-            #   플러스(+) = 빨강 삼각형 (🔺)
-            #   마이너스(-) = 파랑 역삼각형 (🔻)
-            #   보합(0%) = 노랑 동그라미 (🟡)
-            if pct > 0:
-                icon = "🔺"
-            elif pct < 0:
-                icon = "🔻"
-            else:
-                icon = "🟡"
-
-            if curr == "₩":
-                price_str = f"₩{data['close']:,.0f}"
-            else:
-                price_str = f"${data['close']:.2f}"
-
-            pct_str = f"{icon}{pct:+.2f}%"
-            price_cell = pad_str(price_str, 8, "right")
-            pct_cell = pad_str(pct_str, 8, "right")
-        else:
-            price_cell = pad_str("조회실패", 8, "right")
-            pct_cell = pad_str("-", 8, "right")
-
-        msg += f"│ {code_cell} │ {name_cell} │ {price_cell} │ {pct_cell} │\n"
-
-    msg += "└──────────┴───────────┴──────────┴──────────┘\n"
-    msg += "</pre>\n\n"
-
-    # --- 2. 종목별 상세 카드 뷰 ---
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
     for item in stock_results:
@@ -292,10 +333,14 @@ def format_telegram_message(stock_results):
             curr = data.get("currency", "$")
             pct = data['change_pct']
 
+            # 아이콘 규칙: 
+            #   플러스(+) = 빨강 삼각형 (🔺)
+            #   마이너스(-) = 파랑 동그라미 (🔵)
+            #   보합(0%) = 노랑 동그라미 (🟡)
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
-                icon = "🔻"
+                icon = "🔵"
             else:
                 icon = "🟡"
 
@@ -319,7 +364,21 @@ def format_telegram_message(stock_results):
         msg += "\n"
 
     msg += "⚠️ <i>본 리포트는 자동 생성되었으며 투자 참고용입니다.</i>"
-    return msg
+    return msg, latest_date
+
+def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None):
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    data = {"chat_id": chat_id, "parse_mode": "HTML"}
+    if caption:
+        data["caption"] = caption
+    try:
+        with open(file_path, "rb") as f:
+            files = {"document": (filename, f, "text/plain; charset=utf-8")}
+            res = requests.post(url, data=data, files=files)
+            return res.json()
+    except Exception as e:
+        print(f"⚠️ 파일 전송 중 오류: {e}")
+        return {"ok": False}
 
 def send_telegram_message(bot_token, chat_id, message):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -368,21 +427,45 @@ def main():
             "data": data
         })
 
-    report = format_telegram_message(results)
-    print("\n--- 생성된 리포트 ---")
-    print(report)
-    print("-------------------\n")
+    report_msg, latest_date = format_telegram_message(results)
+    table_content = generate_table_file_content(results, latest_date)
+
+    print("\n--- 생성된 요약 파일 내용 ---")
+    print(table_content)
+    print("---------------------------\n")
 
     if is_dry_run:
         print("🧪 Dry-run 모드입니다. 텔레그램 메시지를 실제로 전송하지 않았습니다.")
         return
 
-    print("🚀 텔레그램 메세지 전송 중...")
-    res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report)
-    if res.get("ok"):
-        print("✅ 텔레그램 전송 성공!")
+    # 1. 텍스트 임시 파일 작성
+    filename = f"주식_시세_요약표_{latest_date}.txt"
+    temp_file_path = os.path.join(tempfile.gettempdir(), filename)
+    with open(temp_file_path, "w", encoding="utf-8") as f:
+        f.write(table_content)
+
+    print("🚀 텔레그램 메세지 및 표 파일 전송 중...")
+    
+    # 2. 표 텍스트 파일 (.txt) 텔레그램 첨부파일로 전송
+    doc_res = send_telegram_document(
+        TELEGRAM_BOT_TOKEN, 
+        TELEGRAM_CHAT_ID, 
+        temp_file_path, 
+        filename, 
+        caption=f"<b>📊 주식 시세 요약 표 ({latest_date})</b>"
+    )
+
+    # 3. 메인 상세 카드 브리핑 메시지 전송
+    msg_res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report_msg)
+
+    if doc_res.get("ok") and msg_res.get("ok"):
+        print("✅ 텔레그램 파일 및 메시지 전송 성공!")
     else:
-        print(f"❌ 텔레그램 전송 실패: {res}")
+        print(f"⚠️ 전송 결과: 파일={doc_res.get('ok')}, 메시지={msg_res.get('ok')}")
+
+    # 임시 파일 삭제
+    if os.path.exists(temp_file_path):
+        os.remove(temp_file_path)
 
 if __name__ == "__main__":
     main()
