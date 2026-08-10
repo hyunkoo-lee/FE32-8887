@@ -14,7 +14,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 
-# 구글 시트 연동이 없을 때 사용하는 기본 종목 리스트
 DEFAULT_TARGET_TICKERS = [
     {
         "symbol": "SCHD",
@@ -34,7 +33,6 @@ DEFAULT_TARGET_TICKERS = [
 ]
 
 def extract_sheet_id(url_or_id):
-    """구글 시트 URL에서 Sheet ID 추출"""
     if not url_or_id:
         return None
     if "/d/" in url_or_id:
@@ -44,7 +42,6 @@ def extract_sheet_id(url_or_id):
     return url_or_id.strip()
 
 def normalize_ticker_symbol(symbol):
-    """Yahoo Finance에 맞게 티커 기호 보정 (.KR -> .KS, 6자리 숫자 -> 6자리숫자.KS)"""
     symbol = symbol.strip().upper()
     if symbol.endswith(".KR"):
         symbol = symbol[:-3] + ".KS"
@@ -53,7 +50,6 @@ def normalize_ticker_symbol(symbol):
     return symbol
 
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
-    """구글 시트 CSV 공개 링크를 통해 종목 및 메모 수집"""
     sheet_id = extract_sheet_id(sheet_url_or_id)
     if not sheet_id:
         return []
@@ -74,7 +70,6 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
                 continue
             raw_symbol = row[0].strip()
             
-            # 헤더 행 스킵 (Symbol, 티커, 종목코드 등)
             if raw_symbol.upper() in ["SYMBOL", "TICKER", "티커", "종목코드", "종목"]:
                 continue
             
@@ -103,7 +98,6 @@ def get_stock_data(symbol):
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="5d")
         
-        # .KS로 실패 시 .KQ(코스닥)로 시도
         if df.empty and symbol.endswith(".KS"):
             kq_symbol = symbol[:-3] + ".KQ"
             ticker = yf.Ticker(kq_symbol)
@@ -124,7 +118,6 @@ def get_stock_data(symbol):
         prev_close = float(df.iloc[-2]['Close']) if len(df) > 1 else close_price
         change_pct = ((close_price - prev_close) / prev_close) * 100
 
-        # 최근 뉴스 가져오기 (최대 2건)
         news_items = []
         try:
             raw_news = ticker.news
@@ -151,6 +144,36 @@ def get_stock_data(symbol):
         print(f"⚠️ {symbol} 데이터 조회 실패: {e}")
         return None
 
+def get_display_width(text):
+    """한글/한자 등 전각 문자를 2칸, 영문/숫자를 1칸으로 계산"""
+    width = 0
+    for ch in text:
+        if ord(ch) > 0x7F:
+            width += 2
+        else:
+            width += 1
+    return width
+
+def pad_str(text, target_width, align="left"):
+    """한글 가독성을 고려한 문자열 패딩 함수"""
+    curr_w = get_display_width(text)
+    if curr_w >= target_width:
+        # 너비 초과 시 자르기
+        res = ""
+        w = 0
+        for ch in text:
+            cw = 2 if ord(ch) > 0x7F else 1
+            if w + cw > target_width - 1:
+                break
+            res += ch
+            w += cw
+        return res + " " * (target_width - w)
+    
+    pad_len = target_width - curr_w
+    if align == "right":
+        return " " * pad_len + text
+    return text + " " * pad_len
+
 def format_telegram_message(stock_results):
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
@@ -163,8 +186,55 @@ def format_telegram_message(stock_results):
     if not latest_date:
         latest_date = datetime.date.today().strftime('%Y-%m-%d')
     
-    msg = f"<b>📊 [주식 시가/종가 및 방향성 리포트]</b>\n"
+    msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n\n"
+
+    # --- 1. 표(Table) 요약 브리핑 ---
+    msg += "<b>📈 종목별 수익률 요약 표</b>\n"
+    msg += "<pre>"
+    msg += "┌──────────────┬───────────┬───────────┐\n"
+    msg += "│ 종목명       │ 현재종가   │ 수익률    │\n"
+    msg += "├──────────────┼───────────┼───────────┤\n"
+
+    for item in stock_results:
+        name = item['name']
+        data = item['data']
+        
+        # 이름 길이 줄이기
+        short_name = name[:7]
+        name_cell = pad_str(short_name, 12, "left")
+
+        if data:
+            curr = data.get("currency", "$")
+            pct = data['change_pct']
+
+            # 아이콘 규칙: + = 빨강 삼각형(🔺), - = 파랑 역삼각형(🔻), 0 = 노랑 동그라미(🟡)
+            if pct > 0:
+                icon = "🔺"
+            elif pct < 0:
+                icon = "🔻"
+            else:
+                icon = "🟡"
+
+            if curr == "₩":
+                price_str = f"₩{data['close']:,.0f}"
+            else:
+                price_str = f"${data['close']:.2f}"
+
+            pct_str = f"{icon}{pct:+.2f}%"
+            price_cell = pad_str(price_str, 9, "right")
+            pct_cell = pad_str(pct_str, 9, "right")
+        else:
+            price_cell = pad_str("조회실패", 9, "right")
+            pct_cell = pad_str("-", 9, "right")
+
+        msg += f"│ {name_cell} │ {price_cell} │ {pct_cell} │\n"
+
+    msg += "└──────────────┴───────────┴───────────┘\n"
+    msg += "</pre>\n\n"
+
+    # --- 2. 종목별 상세 카드 뷰 ---
+    msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
     for item in stock_results:
         symbol = item['symbol']
@@ -172,36 +242,34 @@ def format_telegram_message(stock_results):
         data = item['data']
         strategy = item['strategy_summary']
 
-        msg += f"<b>🔹 {name} ({symbol})</b>\n"
+        msg += f"▪️ <b>{name} ({symbol})</b>\n"
         if data:
             curr = data.get("currency", "$")
-            
-            # 수익률 아이콘: 상승(+) = 빨강(🔴), 하락(-) = 파랑(🔵), 변동없음 = 흰색(⚪)
-            if data['change_pct'] > 0:
-                change_emoji = "🔴"
-            elif data['change_pct'] < 0:
-                change_emoji = "🔵"
+            pct = data['change_pct']
+
+            if pct > 0:
+                icon = "🔺"
+            elif pct < 0:
+                icon = "🔻"
             else:
-                change_emoji = "⚪"
+                icon = "🟡"
 
             if curr == "₩":
-                msg += f"• <b>시가(Open):</b> {curr}{data['open']:,.0f}\n"
-                msg += f"• <b>종가(Close):</b> {curr}{data['close']:,.0f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
-                msg += f"• <b>당일 변동:</b> {curr}{data['low']:,.0f} ~ {curr}{data['high']:,.0f}\n"
+                msg += f"  • <b>종가:</b> ₩{data['close']:,.0f} ({icon} <b>{pct:+.2f}%</b>)\n"
+                msg += f"  • <b>시가:</b> ₩{data['open']:,.0f} | <b>범위:</b> ₩{data['low']:,.0f} ~ ₩{data['high']:,.0f}\n"
             else:
-                msg += f"• <b>시가(Open):</b> {curr}{data['open']:.2f}\n"
-                msg += f"• <b>종가(Close):</b> {curr}{data['close']:.2f} ({change_emoji} {data['change_pct']:+.2f}%)\n"
-                msg += f"• <b>당일 변동:</b> {curr}{data['low']:.2f} ~ {curr}{data['high']:.2f}\n"
+                msg += f"  • <b>종가:</b> ${data['close']:.2f} ({icon} <b>{pct:+.2f}%</b>)\n"
+                msg += f"  • <b>시가:</b> ${data['open']:.2f} | <b>범위:</b> ${data['low']:.2f} ~ ${data['high']:.2f}\n"
         else:
-            msg += f"• 주가 데이터를 조회할 수 없습니다.\n"
+            msg += f"  • 주가 데이터를 조회할 수 없습니다.\n"
 
         if strategy and strategy != "지정된 메모 없음":
-            msg += f"💡 <b>메모/전략:</b> {strategy}\n"
+            msg += f"  💡 <b>메모:</b> {strategy}\n"
 
         if data and data.get('news'):
-            msg += "📰 <b>최근 주요 헤드라인:</b>\n"
+            msg += "  📰 <b>최근 뉴스:</b>\n"
             for news_title in data['news']:
-                msg += f"  - {news_title}\n"
+                msg += f"    - {news_title}\n"
 
         msg += "\n"
 
@@ -226,7 +294,6 @@ def main():
         print("❌ 오류: TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 값이 설정되지 않았습니다.")
         sys.exit(1)
 
-    # 구글 시트 연동 여부 확인
     target_tickers = []
     if GOOGLE_SHEET_URL:
         print(f"📖 구글 시트에서 종목 목록 조회 중... ({GOOGLE_SHEET_URL})")
