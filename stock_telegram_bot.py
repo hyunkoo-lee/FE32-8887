@@ -362,17 +362,29 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
             else:
                 pct_str = f"{pct:.2f}%"
                 pct_paragraph = Paragraph(pct_str, cell_center)
+
+            # 종가 텍스트 색상 조건: 종가 > 시가 (빨간색), 종가 < 시가 (파란색), 종가 = 시가 (검은색)
+            close_price = data['close']
+            open_price = data['open']
+
+            if close_price > open_price:
+                close_paragraph = Paragraph(close_str, cell_bold_plus)
+            elif close_price < open_price:
+                close_paragraph = Paragraph(close_str, cell_bold_minus)
+            else:
+                close_paragraph = Paragraph(close_str, cell_right)
         else:
             open_str = "-"
             close_str = "조회실패"
             range_str = "-"
+            close_paragraph = Paragraph("조회실패", cell_center)
             pct_paragraph = Paragraph("-", cell_center)
 
         table_data.append([
             Paragraph(disp_symbol, cell_center),
             Paragraph(name, cell_left),
             Paragraph(open_str, cell_right),
-            Paragraph(close_str, cell_right),
+            close_paragraph,
             Paragraph(range_str, cell_center),
             pct_paragraph,
             Paragraph(strategy, cell_left)
