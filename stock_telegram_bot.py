@@ -262,9 +262,9 @@ def generate_open_close_chart(stock_results, chart_img_path):
         data = item['data']
         curr = data.get('currency', '$')
         if curr == '₩':
-            price_text = f" 시가: ₩{data['open']:,.0f} ➔ 종가: ₩{data['close']:,.0f} ({width:+.2f}%) "
+            price_text = f" 시가: ₩{data['open']:,.0f} -> 종가: ₩{data['close']:,.0f} ({width:+.2f}%) "
         else:
-            price_text = f" 시가: ${data['open']:.2f} ➔ 종가: ${data['close']:.2f} ({width:+.2f}%) "
+            price_text = f" 시가: ${data['open']:.2f} -> 종가: ${data['close']:.2f} ({width:+.2f}%) "
         
         offset = 0.15 if width >= 0 else -0.15
         ha = 'left' if width >= 0 else 'right'
