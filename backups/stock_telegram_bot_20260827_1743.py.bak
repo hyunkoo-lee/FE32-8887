@@ -8,13 +8,8 @@ import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
@@ -232,52 +227,8 @@ def get_stock_data(symbol):
         print(f"⚠️ {symbol} 데이터 조회 실패: {e}")
         return None
 
-def generate_open_close_chart(stock_results, chart_img_path):
-    """시가 vs 종가 등락률 도식화 바 차트 이미지 생성"""
-    font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
-    if os.path.exists(font_path):
-        fm.fontManager.addfont(font_path)
-        plt.rc('font', family='NanumGothic')
-    plt.rcParams['axes.unicode_minus'] = False
-
-    valid_items = [r for r in stock_results if r.get('data')]
-    if not valid_items:
-        return None
-
-    names = [r['name'][:14] for r in valid_items]
-    pcts = [r['data']['change_pct'] for r in valid_items]
-    colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
-
-    # 가로 바 차트 생성
-    fig, ax = plt.subplots(figsize=(10.5, max(3.5, len(valid_items) * 0.45 + 1.2)))
-    bars = ax.barh(names, pcts, color=colors_list, height=0.55)
-
-    ax.axvline(0, color='#94A3B8', linewidth=1, linestyle='--')
-    ax.set_xlabel('시가 대비 종가 등락률 (%)', fontsize=10, fontweight='bold', labelpad=10)
-    ax.set_title('📊 종목별 시가 ➔ 종가 변동 도식화 차트', fontsize=13, fontweight='bold', pad=12)
-    ax.grid(axis='x', linestyle=':', alpha=0.6)
-
-    for bar, item in zip(bars, valid_items):
-        width = bar.get_width()
-        data = item['data']
-        curr = data.get('currency', '$')
-        if curr == '₩':
-            price_text = f" 시가: ₩{data['open']:,.0f} ➔ 종가: ₩{data['close']:,.0f} ({width:+.2f}%) "
-        else:
-            price_text = f" 시가: ${data['open']:.2f} ➔ 종가: ${data['close']:.2f} ({width:+.2f}%) "
-        
-        offset = 0.15 if width >= 0 else -0.15
-        ha = 'left' if width >= 0 else 'right'
-        ax.text(width + offset, bar.get_y() + bar.get_height()/2, price_text, 
-                va='center', ha=ha, fontsize=8, color='#1E293B')
-
-    plt.tight_layout()
-    plt.savefig(chart_img_path, dpi=200, bbox_inches='tight')
-    plt.close()
-    return chart_img_path
-
 def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
-    """ReportLab을 사용하여 한 행에 모든 시세 정보가 출력되고 차트가 포함된 가로형 PDF 생성"""
+    """ReportLab을 사용하여 한 행에 모든 시세 정보가 출력되는 아름다운 가로형 PDF 생성"""
     font_name, bold_font_name = ensure_korean_font()
     
     # A4 가로 페이지 (너비 842pt, 높이 595pt)
@@ -371,15 +322,14 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
         textColor=colors.HexColor('#2563EB') # 파란색
     )
 
-    # 순서: 종목코드, 종목명, 시가, 종가, 수익률, 당일 변동 범위, 메모 및 보유전략
     table_data = [
         [
             Paragraph('종목코드', hdr_style),
             Paragraph('종목명(한글)', hdr_style),
             Paragraph('시가', hdr_style),
             Paragraph('종가', hdr_style),
-            Paragraph('수익률', hdr_style),
             Paragraph('당일 변동 범위', hdr_style),
+            Paragraph('수익률', hdr_style),
             Paragraph('메모 및 보유 전략', hdr_style)
         ]
     ]
@@ -393,8 +343,6 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
         if data:
             curr = data.get("currency", "$")
             pct = data['change_pct']
-            close_price = data['close']
-            open_price = data['open']
 
             if curr == "₩":
                 open_str = f"₩{data['open']:,.0f}"
@@ -405,15 +353,6 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
                 close_str = f"${data['close']:.2f}"
                 range_str = f"${data['low']:.2f} ~ ${data['high']:.2f}"
 
-            # 종가 색상 규칙: 종가 > 시가 (빨간색), 종가 < 시가 (파란색), 종가 = 시가 (검은색)
-            if close_price > open_price:
-                close_paragraph = Paragraph(close_str, cell_bold_plus)
-            elif close_price < open_price:
-                close_paragraph = Paragraph(close_str, cell_bold_minus)
-            else:
-                close_paragraph = Paragraph(close_str, cell_right)
-
-            # 수익률 색상 규칙: > 0 (빨간색), < 0 (파란색), = 0 (검은색)
             if pct > 0:
                 pct_str = f"+{pct:.2f}%"
                 pct_paragraph = Paragraph(pct_str, cell_bold_plus)
@@ -423,6 +362,17 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
             else:
                 pct_str = f"{pct:.2f}%"
                 pct_paragraph = Paragraph(pct_str, cell_center)
+
+            # 종가 텍스트 색상 조건: 종가 > 시가 (빨간색), 종가 < 시가 (파란색), 종가 = 시가 (검은색)
+            close_price = data['close']
+            open_price = data['open']
+
+            if close_price > open_price:
+                close_paragraph = Paragraph(close_str, cell_bold_plus)
+            elif close_price < open_price:
+                close_paragraph = Paragraph(close_str, cell_bold_minus)
+            else:
+                close_paragraph = Paragraph(close_str, cell_right)
         else:
             open_str = "-"
             close_str = "조회실패"
@@ -435,14 +385,13 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
             Paragraph(name, cell_left),
             Paragraph(open_str, cell_right),
             close_paragraph,
-            pct_paragraph,
             Paragraph(range_str, cell_center),
+            pct_paragraph,
             Paragraph(strategy, cell_left)
         ])
 
     # 7개 컬럼 총 너비 = 782pt (Landscape A4 너비 842 - 여백 60)
-    # 순서: 종목코드(70), 종목명(165), 시가(75), 종가(75), 수익률(75), 당일 변동 범위(125), 메모 및 보유전략(197)
-    col_widths = [70, 165, 75, 75, 75, 125, 197]
+    col_widths = [75, 175, 75, 75, 125, 70, 187]
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
     
     t.setStyle(TableStyle([
@@ -462,15 +411,6 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
         t
     ]
 
-    # 시가 ➔ 종가 도식화 차트 생성 및 추가
-    chart_filepath = os.path.join(tempfile.gettempdir(), "stock_open_close_chart.png")
-    if generate_open_close_chart(stock_results, chart_filepath) and os.path.exists(chart_filepath):
-        elements.append(Spacer(1, 15))
-        elements.append(Paragraph("<b>📈 종목별 시가 ➔ 종가 변동 도식화 그래프</b>", title_style))
-        elements.append(Spacer(1, 5))
-        chart_h = min(320, len(stock_results) * 22 + 80)
-        elements.append(Image(chart_filepath, width=780, height=chart_h))
-
     doc.build(elements)
     print(f"📄 PDF 리포트 생성 완료: {pdf_filepath}")
 
@@ -488,7 +428,7 @@ def format_telegram_message(stock_results):
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n"
-    msg += f"📎 <i>한눈에 들어오는 전체 종합 시세 표 및 도식화 그래프는 아래 첨부된 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
+    msg += f"📎 <i>한눈에 들어오는 전체 종합 시세 표는 아래 첨부된 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
 
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
@@ -600,7 +540,7 @@ def main():
 
     report_msg, latest_date = format_telegram_message(results)
 
-    # 1. PDF 리포트 파일 생성 (시가/종가 도식화 차트 포함)
+    # 1. PDF 리포트 파일 생성
     pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
     pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
     create_stock_pdf_report(results, latest_date, pdf_filepath)
@@ -621,7 +561,7 @@ def main():
         TELEGRAM_CHAT_ID, 
         pdf_filepath, 
         pdf_filename, 
-        caption=f"<b>📄 주식 시세 요약 표 및 도식화 그래프 PDF 문서 ({latest_date})</b>"
+        caption=f"<b>📄 주식 시세 요약 표 PDF 문서 ({latest_date})</b>"
     )
     print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
