@@ -92,25 +92,23 @@ def normalize_ticker_symbol(symbol):
     symbol = symbol.strip().upper()
     if symbol.endswith(".KR"):
         symbol = symbol[:-3] + ".KS"
-    elif len(symbol) == 6 and symbol.isalnum() and not symbol.isalpha():
-        # 6자리 알파벳/숫자 혼용 국내 종목코드 (0167B0, 0219E0 등)
-        if not (symbol.endswith(".KS") or symbol.endswith(".KQ")):
-            symbol = symbol + ".KS"
+    elif len(symbol) == 6 and symbol.isdigit():
+        symbol = symbol + ".KS"
     return symbol
 
 def normalize_display_symbol(symbol):
-    """표시용 종목코드 정돈 (441800.KS -> 441800, 0167B0.KS -> 0167B0)"""
+    """표시용 종목코드 정돈 (441800.KS -> 441800)"""
     if symbol.endswith(".KS") or symbol.endswith(".KQ"):
         return symbol[:-3]
     return symbol
 
 def fetch_naver_stock_name(symbol_or_code):
-    """네이버 증권 API를 통해 국내(신종목코드 포함) 및 해외 주식의 공식 한글 종목명 조회"""
+    """네이버 증권 API를 통해 국내 및 해외 주식의 공식 한글 종목명 조회"""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     clean_code = symbol_or_code.replace('.KS', '').replace('.KQ', '').strip()
     
-    # 1. 국내 주식/ETF (6자리 숫자 및 알파벳 혼용 신종목코드 포함)
-    if len(clean_code) == 6 and clean_code.isalnum():
+    # 1. 국내 주식/ETF (6자리 숫자)
+    if clean_code.isdigit():
         try:
             url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
             res = requests.get(url, headers=headers, timeout=5)
@@ -235,7 +233,7 @@ def get_stock_data(symbol):
         return None
 
 def generate_open_close_full_page_chart(stock_results, chart_img_path):
-    """그래프에 등락률(%) 및 종가만 표기하는 풀페이지 도식화 차트 생성"""
+    """한 페이지를 꽉 채우며 막대 내부(Inside Bar)에 시가/종가가 표기되는 고화질 도식화 차트 생성"""
     font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
@@ -250,33 +248,38 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     pcts = [r['data']['change_pct'] for r in valid_items]
     colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
 
-    # 풀페이지 대형 바 차트
+    # 풀페이지 대형 바 차트 (Landscape A4 해상도 극대화)
     fig, ax = plt.subplots(figsize=(15.5, max(8.5, len(valid_items) * 0.48)))
     bars = ax.barh(names, pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
 
     ax.axvline(0, color='#475569', linewidth=1.5, linestyle='--')
-    ax.set_xlabel('종목별 등락률 (%)', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프', fontsize=18, fontweight='bold', pad=22)
+    ax.set_xlabel('시가 대비 종가 등락률 (%)', fontsize=13, fontweight='bold', labelpad=14)
+    ax.set_title('종목별 시가 vs 종가 변동 도식화 그래프', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
     ax.tick_params(axis='y', labelsize=11)
     ax.tick_params(axis='x', labelsize=11)
 
-    # 요청 사항: 그래프에는 %율과 종가만 (순서: %, 종가 순) 표기
+    # 막대 내부(Inside Bar)에 시가, 종가 가격 명확한 텍스트 라벨링
     for bar, item in zip(bars, valid_items):
         width = bar.get_width()
         data = item['data']
         curr = data.get('currency', '$')
-        cl = data['close']
         
+        op = data['open']
+        cl = data['close']
         if curr == '₩':
+            open_str = f"₩{op:,.0f}"
             close_str = f"₩{cl:,.0f}"
         else:
+            open_str = f"${op:.2f}"
             close_str = f"${cl:.2f}"
 
-        price_text = f" ({width:+.2f}%) 종가: {close_str} "
+        price_text = f" 시가: {open_str} -> 종가: {close_str} ({width:+.2f}%) "
 
+        # 등락 폭 크기에 따라 막대 내부/외부 적절한 배치
         if width >= 0:
             if width >= 0.4:
+                # 막대 내부 (오른쪽 안쪽 정렬)
                 ax.text(
                     width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -288,6 +291,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     color='#FFFFFF'
                 )
             else:
+                # 막대 외부 (오른쪽 밖 정렬)
                 ax.text(
                     width + 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -301,6 +305,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                 )
         else:
             if abs(width) >= 0.4:
+                # 막대 내부 (왼쪽 안쪽 정렬)
                 ax.text(
                     width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -312,6 +317,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     color='#FFFFFF'
                 )
             else:
+                # 막대 외부 (왼쪽 밖 정렬)
                 ax.text(
                     width - 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -515,12 +521,13 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
         t
     ]
 
-    # Page 2: %, 종가 순서 표기 풀페이지 도식화 차트
+    # Page 2: 막대 내부 가격 표기 대형 풀페이지 도식화 차트
     chart_filepath = os.path.join(tempfile.gettempdir(), "stock_full_page_chart.png")
     if generate_open_close_full_page_chart(stock_results, chart_filepath) and os.path.exists(chart_filepath):
-        elements.append(PageBreak()) # 2페이지 전용 배치
-        elements.append(Paragraph("<b>📈 [종목별 수익률 및 종가 변동 도식화 그래프]</b>", title_style))
+        elements.append(PageBreak()) # 깔끔하게 2페이지로 구별
+        elements.append(Paragraph("<b>📈 [종목별 시가 ➔ 종가 변동 도식화 그래프]</b>", title_style))
         elements.append(Spacer(1, 8))
+        # Landscape A4 너비 790pt, 높이 485pt로 풀페이지 배치
         elements.append(Image(chart_filepath, width=790, height=485))
 
     doc.build(elements)
@@ -652,7 +659,7 @@ def main():
 
     report_msg, latest_date = format_telegram_message(results)
 
-    # 1. PDF 리포트 파일 생성
+    # 1. PDF 리포트 파일 생성 (페이지 2 풀페이지 도식화 차트 포함)
     pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
     pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
     create_stock_pdf_report(results, latest_date, pdf_filepath)
@@ -673,7 +680,7 @@ def main():
         TELEGRAM_CHAT_ID, 
         pdf_filepath, 
         pdf_filename, 
-        caption=f"<b>📄 주식 시세 요약 표 및 등락률/종가 도식화 PDF 문서 ({latest_date})</b>"
+        caption=f"<b>📄 주식 시세 요약 표 및 막대 내부 시세 표기 PDF 문서 ({latest_date})</b>"
     )
     print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
