@@ -233,7 +233,7 @@ def get_stock_data(symbol):
         return None
 
 def generate_open_close_full_page_chart(stock_results, chart_img_path):
-    """한 페이지를 꽉 채우며 막대 내부(Inside Bar)에 시가/종가가 표기되는 고화질 도식화 차트 생성"""
+    """한 페이지를 꽉 채우는 고화질 시가 vs 종가 등락률 도식화 차트 생성"""
     font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
@@ -246,20 +246,20 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
 
     names = [f"{r['name']} ({r.get('display_symbol', r['symbol'])})" for r in valid_items]
     pcts = [r['data']['change_pct'] for r in valid_items]
-    colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
+    colors_list = ['#EF4444' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
 
-    # 풀페이지 대형 바 차트 (Landscape A4 해상도 극대화)
-    fig, ax = plt.subplots(figsize=(15.5, max(8.5, len(valid_items) * 0.48)))
-    bars = ax.barh(names, pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
+    # 풀페이지용 대형 가로 바 차트 (Landscape A4에 맞춤)
+    fig, ax = plt.subplots(figsize=(13.5, max(7.5, len(valid_items) * 0.42)))
+    bars = ax.barh(names, pcts, color=colors_list, height=0.55, edgecolor='#475569', linewidth=0.6)
 
     ax.axvline(0, color='#475569', linewidth=1.5, linestyle='--')
-    ax.set_xlabel('시가 대비 종가 등락률 (%)', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('종목별 시가 vs 종가 변동 도식화 그래프', fontsize=18, fontweight='bold', pad=22)
+    ax.set_xlabel('시가 대비 종가 등락률 (%)', fontsize=12, fontweight='bold', labelpad=12)
+    ax.set_title('종목별 시가 vs 종가 변동 도식화 그래프', fontsize=16, fontweight='bold', pad=20)
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
-    ax.tick_params(axis='y', labelsize=11)
-    ax.tick_params(axis='x', labelsize=11)
+    ax.tick_params(axis='y', labelsize=10)
+    ax.tick_params(axis='x', labelsize=10)
 
-    # 막대 내부(Inside Bar)에 시가, 종가 가격 명확한 텍스트 라벨링
+    # 각 종목별 시가, 종가 가격 명확한 텍스트 박스 표기
     for bar, item in zip(bars, valid_items):
         width = bar.get_width()
         data = item['data']
@@ -274,61 +274,26 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
             open_str = f"${op:.2f}"
             close_str = f"${cl:.2f}"
 
-        price_text = f" 시가: {open_str} -> 종가: {close_str} ({width:+.2f}%) "
-
-        # 등락 폭 크기에 따라 막대 내부/외부 적절한 배치
         if width >= 0:
-            if width >= 0.4:
-                # 막대 내부 (오른쪽 안쪽 정렬)
-                ax.text(
-                    width * 0.96, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='right', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#FFFFFF'
-                )
-            else:
-                # 막대 외부 (오른쪽 밖 정렬)
-                ax.text(
-                    width + 0.05, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='left', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#0F172A',
-                    bbox=dict(boxstyle="round,pad=0.2", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
-                )
+            price_text = f" 시가: {open_str} -> 종가: {close_str} ({width:+.2f}%) "
+            offset = 0.08
+            ha = 'left'
         else:
-            if abs(width) >= 0.4:
-                # 막대 내부 (왼쪽 안쪽 정렬)
-                ax.text(
-                    width * 0.96, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='left', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#FFFFFF'
-                )
-            else:
-                # 막대 외부 (왼쪽 밖 정렬)
-                ax.text(
-                    width - 0.05, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='right', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#0F172A',
-                    bbox=dict(boxstyle="round,pad=0.2", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
-                )
+            price_text = f" ({width:+.2f}%) 시가: {open_str} -> 종가: {close_str} "
+            offset = -0.08
+            ha = 'right'
+
+        ax.text(
+            width + offset, 
+            bar.get_y() + bar.get_height()/2, 
+            price_text, 
+            va='center', 
+            ha=ha, 
+            fontsize=9.5, 
+            fontweight='bold', 
+            color='#0F172A',
+            bbox=dict(boxstyle="round,pad=0.25", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
+        )
 
     plt.tight_layout()
     plt.savefig(chart_img_path, dpi=300, bbox_inches='tight')
@@ -336,17 +301,17 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     return chart_img_path
 
 def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
-    """ReportLab을 사용하여 표와 풀페이지 대형 도식화 차트가 담긴 PDF 생성"""
+    """ReportLab을 사용하여 표와 풀페이지 도식화 차트가 담긴 PDF 생성"""
     font_name, bold_font_name = ensure_korean_font()
     
     # A4 가로 페이지 (너비 842pt, 높이 595pt)
     doc = SimpleDocTemplate(
         pdf_filepath,
         pagesize=landscape(A4),
-        leftMargin=25,
-        rightMargin=25,
-        topMargin=25,
-        bottomMargin=25
+        leftMargin=30,
+        rightMargin=30,
+        topMargin=30,
+        bottomMargin=30
     )
     
     styles = getSampleStyleSheet()
@@ -499,8 +464,8 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
             Paragraph(strategy, cell_left)
         ])
 
-    # 7개 컬럼 총 너비 = 792pt (Landscape A4 너비 842 - 여백 50)
-    col_widths = [70, 170, 75, 75, 75, 125, 202]
+    # 7개 컬럼 총 너비 = 782pt (Landscape A4 너비 842 - 여백 60)
+    col_widths = [70, 165, 75, 75, 75, 125, 197]
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
     
     t.setStyle(TableStyle([
@@ -521,14 +486,14 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
         t
     ]
 
-    # Page 2: 막대 내부 가격 표기 대형 풀페이지 도식화 차트
+    # Page 2: 한 페이지를 꽉 채우는 풀페이지 시가 ➔ 종가 변동 도식화 차트
     chart_filepath = os.path.join(tempfile.gettempdir(), "stock_full_page_chart.png")
     if generate_open_close_full_page_chart(stock_results, chart_filepath) and os.path.exists(chart_filepath):
-        elements.append(PageBreak()) # 깔끔하게 2페이지로 구별
+        elements.append(PageBreak()) # 깔끔하게 다음 페이지로 구분
         elements.append(Paragraph("<b>📈 [종목별 시가 ➔ 종가 변동 도식화 그래프]</b>", title_style))
-        elements.append(Spacer(1, 8))
-        # Landscape A4 너비 790pt, 높이 485pt로 풀페이지 배치
-        elements.append(Image(chart_filepath, width=790, height=485))
+        elements.append(Spacer(1, 10))
+        # Landscape A4 너비 780pt, 높이 460pt로 꽉 채움
+        elements.append(Image(chart_filepath, width=780, height=460))
 
     doc.build(elements)
     print(f"📄 PDF 리포트 생성 완료: {pdf_filepath}")
@@ -680,7 +645,7 @@ def main():
         TELEGRAM_CHAT_ID, 
         pdf_filepath, 
         pdf_filename, 
-        caption=f"<b>📄 주식 시세 요약 표 및 막대 내부 시세 표기 PDF 문서 ({latest_date})</b>"
+        caption=f"<b>📄 주식 시세 요약 표 및 풀페이지 도식화 차트 PDF 문서 ({latest_date})</b>"
     )
     print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
