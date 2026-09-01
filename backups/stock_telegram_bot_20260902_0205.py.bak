@@ -20,14 +20,13 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# .env 파일 로드 (로컬 테스트 실행 시)
+# .env 파일 로드 (로컬 실행 시)
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 
-# 기본 설정 종목 목록 (구글 시트 미연동 또는 데이터 부재 시 백업용)
 DEFAULT_TARGET_TICKERS = [
     {
         "symbol": "SCHD",
@@ -47,15 +46,7 @@ DEFAULT_TARGET_TICKERS = [
 ]
 
 def ensure_korean_font():
-    """
-    [폰트 준비 함수]
-    ReportLab PDF 생성 및 Matplotlib 차트 시각화 시 한글 깨짐 방지를 위하여
-    Google Fonts(NanumGothic)에서 한글 TTF 폰트(Regular, Bold)를 임시 디렉토리에 다운로드하고
-    ReportLab 및 Matplotlib 레지스트리에 등록합니다.
-    
-    Returns:
-        tuple: (font_name, bold_font_name) - 등록된 폰트 이름 식별자
-    """
+    """ReportLab 및 Matplotlib용 한글 폰트(NanumGothic) 준비"""
     font_name = "NanumGothic"
     bold_font_name = "NanumGothicBold"
     
@@ -89,17 +80,6 @@ def ensure_korean_font():
     return font_name, bold_font_name
 
 def extract_sheet_id(url_or_id):
-    """
-    [구글 시트 ID 추출 함수]
-    사용자가 입력한 전체 구글 시트 URL(https://docs.google.com/spreadsheets/d/.../edit) 또는
-    순수 시트 ID 문자열에서 구글 시트 식별자(Spreadsheet ID)만 추출하여 반환합니다.
-    
-    Args:
-        url_or_id (str): 구글 시트 URL 또는 시트 ID
-        
-    Returns:
-        str or None: 추출된 구글 시트 ID
-    """
     if not url_or_id:
         return None
     if "/d/" in url_or_id:
@@ -109,18 +89,6 @@ def extract_sheet_id(url_or_id):
     return url_or_id.strip()
 
 def normalize_ticker_symbol(symbol):
-    """
-    [야후 파이낸스 티커 정규화 함수]
-    입력된 종목코드를 야후 파이낸스(yfinance) 조회가 가능한 형태로 정규화합니다.
-    - 국내 6자리 종목코드(알파벳+숫자 혼용 신종목코드 포함, 예: 441800, 0167B0, 0219E0 등) 뒤에 '.KS' 접미사 부착
-    - 기존 '.KR' 접미사를 '.KS'로 변환 및 영문 대문자 정돈
-    
-    Args:
-        symbol (str): 입력 종목코드
-        
-    Returns:
-        str: 정규화된 야후 파이낸스 티커 symbol (예: '441800.KS', '0167B0.KS', 'SCHD')
-    """
     symbol = symbol.strip().upper()
     if symbol.endswith(".KR"):
         symbol = symbol[:-3] + ".KS"
@@ -131,33 +99,13 @@ def normalize_ticker_symbol(symbol):
     return symbol
 
 def normalize_display_symbol(symbol):
-    """
-    [표시용 종목코드 정돈 함수]
-    텔레그램 메시지 및 PDF 요약표에 깔끔하게 출력하기 위해
-    야후 파이낸스용 접미사('.KS', '.KQ')를 제거한 6자리 순수 종목코드를 반환합니다.
-    
-    Args:
-        symbol (str): 야후 파이낸스 티커 symbol
-        
-    Returns:
-        str: 화면 표시용 종목코드 (예: '441800.KS' -> '441800')
-    """
+    """표시용 종목코드 정돈 (441800.KS -> 441800, 0167B0.KS -> 0167B0)"""
     if symbol.endswith(".KS") or symbol.endswith(".KQ"):
         return symbol[:-3]
     return symbol
 
 def fetch_naver_stock_name(symbol_or_code):
-    """
-    [네이버 증권 한글 종목명 조회 함수]
-    네이버 증권 API(m.stock.naver.com & api.stock.naver.com)를 호출하여
-    국내 주식/ETF(신종목코드 포함) 및 해외 주식의 공식 한글 종목명을 자동으로 가져옵니다.
-    
-    Args:
-        symbol_or_code (str): 종목코드 또는 티커
-        
-    Returns:
-        str or None: 네이버 증권에서 조회된 공식 한글 종목명 (조회 실패 시 None)
-    """
+    """네이버 증권 API를 통해 국내(신종목코드 포함) 및 해외 주식의 공식 한글 종목명 조회"""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     clean_code = symbol_or_code.replace('.KS', '').replace('.KQ', '').strip()
     
@@ -188,17 +136,6 @@ def fetch_naver_stock_name(symbol_or_code):
     return None
 
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
-    """
-    [구글 시트 종목 목록 파싱 함수]
-    연동된 구글 시트를 CSV 형식으로 읽어와 A열(종목코드), B열(종목명), C열(매수전략/메모)을 파싱합니다.
-    네이버 증권 API를 통해 최신 공식 한글 종목명을 우선 반영합니다.
-    
-    Args:
-        sheet_url_or_id (str): 구글 시트 URL 또는 ID
-        
-    Returns:
-        list[dict]: 파싱된 종목 정보 사전 리스트
-    """
     sheet_id = extract_sheet_id(sheet_url_or_id)
     if not sheet_id:
         return []
@@ -247,17 +184,6 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
         return []
 
 def get_stock_data(symbol):
-    """
-    [주가 시세 및 뉴스 수집 함수]
-    yfinance 라이브러리를 이용해 해당 종목의 시가(Open), 고가(High), 저가(Low), 종가(Close),
-    전일 대비 등락률(%), 통화 단위 및 관련 최근 뉴스 2건을 수집합니다.
-    
-    Args:
-        symbol (str): 야후 파이낸스 티커 symbol
-        
-    Returns:
-        dict or None: 주가 데이터 사전 객체 (조회 실패 시 None)
-    """
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="5d")
@@ -309,18 +235,7 @@ def get_stock_data(symbol):
         return None
 
 def generate_open_close_full_page_chart(stock_results, chart_img_path):
-    """
-    [PDF 2페이지 풀페이지 도식화 차트 생성 함수]
-    Matplotlib을 사용하여 A4 가로 한 페이지를 꽉 채우는 대형 가로 바 차트를 작성합니다.
-    막대 내부/외부에 등락률(%)과 종가만 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
-    
-    Args:
-        stock_results (list[dict]): 종목별 시세 데이터 리스트
-        chart_img_path (str): 저장할 이미지 파일 경로
-        
-    Returns:
-        str or None: 생성된 차트 이미지 파일 경로
-    """
+    """그래프에 등락률(%) 및 종가만 표기하는 풀페이지 도식화 차트 생성"""
     font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
@@ -335,7 +250,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     pcts = [r['data']['change_pct'] for r in valid_items]
     colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
 
-    # 풀페이지 대형 바 차트 생성 (Landscape A4 너비/높이에 맞춤)
+    # 풀페이지 대형 바 차트
     fig, ax = plt.subplots(figsize=(15.5, max(8.5, len(valid_items) * 0.48)))
     bars = ax.barh(names, pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
 
@@ -360,7 +275,6 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
 
         price_text = f" ({width:+.2f}%) 종가: {close_str} "
 
-        # 막대 너비에 따라 내부(Inside Bar) 또는 외부 텍스트 배치
         if width >= 0:
             if width >= 0.4:
                 ax.text(
@@ -416,17 +330,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     return chart_img_path
 
 def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
-    """
-    [ReportLab PDF 리포트 문서 빌드 함수]
-    ReportLab 라이브러리를 사용하여 2페이지 구조의 가로형(Landscape A4) PDF 문서 파일(.pdf)을 생성합니다.
-    - 1페이지: 종목코드, 종목명, 시가, 종가, 수익률, 당일 변동 범위, 메모가 담긴 종합 시세 표
-    - 2페이지: 등락률(%)과 종가가 표기된 대형 풀페이지 시각화 차트 그래프
-    
-    Args:
-        stock_results (list[dict]): 종목별 시세 데이터 리스트
-        latest_date (str): 시세 기준 일자
-        pdf_filepath (str): 생성될 PDF 파일 경로
-    """
+    """ReportLab을 사용하여 표와 풀페이지 대형 도식화 차트가 담긴 PDF 생성"""
     font_name, bold_font_name = ensure_korean_font()
     
     # A4 가로 페이지 (너비 842pt, 높이 595pt)
@@ -623,17 +527,6 @@ def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
     print(f"📄 PDF 리포트 생성 완료: {pdf_filepath}")
 
 def format_telegram_message(stock_results):
-    """
-    [텔레그램 브리핑 메시지 포맷팅 함수]
-    텔레그램 채팅창에 발송할 상세 카드 형태의 HTML 포맷 텍스트 메시지를 생성합니다.
-    수익률에 따라 빨간색 상승 삼각형(🔺), 파란색 동그라미(🔵), 노란색 동그라미(🟡) 아이콘을 적용합니다.
-    
-    Args:
-        stock_results (list[dict]): 종목별 시세 데이터 리스트
-        
-    Returns:
-        tuple: (HTML 메시지 문자열, 기준일자 문자열)
-    """
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
 
@@ -697,18 +590,6 @@ def format_telegram_message(stock_results):
     return msg, latest_date
 
 def send_telegram_message(bot_token, chat_id, message):
-    """
-    [텔레그램 텍스트 메시지 발송 API 함수]
-    Telegram Bot API(sendMessage)를 호출하여 작성된 브리핑 HTML 메시지를 텔레그램으로 발송합니다.
-    
-    Args:
-        bot_token (str): 텔레그램 봇 토큰
-        chat_id (str): 대상 텔레그램 채팅방 ID
-        message (str): 발송할 HTML 메시지 텍스트
-        
-    Returns:
-        dict: 텔레그램 API 응답 JSON 객체
-    """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -720,20 +601,6 @@ def send_telegram_message(bot_token, chat_id, message):
     return response.json()
 
 def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None):
-    """
-    [텔레그램 문서 파일(PDF) 첨부 발송 API 함수]
-    Telegram Bot API(sendDocument)를 호출하여 생성된 PDF 리포트 파일(.pdf)을 텔레그램으로 발송합니다.
-    
-    Args:
-        bot_token (str): 텔레그램 봇 토큰
-        chat_id (str): 대상 텔레그램 채팅방 ID
-        file_path (str): 발송할 PDF 파일 경로
-        filename (str): 첨부 파일 표시 이름
-        caption (str, optional): 캡션 텍스트
-        
-    Returns:
-        dict: 텔레그램 API 응답 JSON 객체
-    """
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     data = {"chat_id": chat_id, "parse_mode": "HTML"}
     if caption:
@@ -748,16 +615,6 @@ def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None
         return {"ok": False}
 
 def main():
-    """
-    [프로그램 메인 실행 파이프라인 함수]
-    전체 주식 브리핑 자동화 파이프라인의 실행 흐름을 제어합니다:
-    1. 환경 변수 및 설정 검증
-    2. 구글 시트 / 기본 종목 파싱 및 네이버 증권 종목명 연동
-    3. 야후 파이낸스 주가 시세 및 관련 뉴스 수집
-    4. HTML 브리핑 메시지 포맷팅 및 PDF 문서 파일(1페이지 표, 2페이지 차트) 생성
-    5. 텔레그램 전송 (메시지 먼저 발송 ➡️ PDF 파일 마지막 발송)
-    6. 임시 파일 Cleanup 처리
-    """
     is_dry_run = "--dry-run" in sys.argv or "--test" in sys.argv
 
     if not is_dry_run and (not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID):
