@@ -1,49 +1,79 @@
-# 📈 미국 주식(SCHD, QLD, NU) 텔레그램 일일 리포트 자동화 봇
+# 📊 주식 시세 브리핑 및 PDF 리포트 텔레그램 자동화 봇
 
-미국 주식 시장 마감 후(SCHD, QLD, NU) 시가, 종가, 고가, 저가 및 주요 뉴스/매수·매도 방향성을 텔레그램으로 자동 전송해 주는 스크립트입니다.
-
----
-
-## 🛠️ 1. 사전 준비 사항 (텔레그램 봇 생성)
-
-1. **텔레그램 앱**에서 `@BotFather` 검색 후 대화 시작
-2. `/newbot` 입력 후 안내에 따라 봇 이름 및 아이디 생성
-3. 발급된 **HTTP API Token** 복사 (예: `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`)
-4. 텔레그램 검색창에서 생성한 봇 아이디를 검색하여 `/start` 메시지를 보내 대화 시작
-5. 자신의 **Chat ID** 확인: 텔레그램 검색창에서 `@userinfobot` 검색 후 `/start`를 누르면 자신의 `Id` 숫자를 확인 가능
+미국 및 국내 주식/ETF 시장의 시세(시가, 종가, 고가, 저가, 등락률)와 관련 뉴스를 자동으로 수집하여, **텔레그램 브리핑 메시지** 및 **가로형(Landscape A4) 2페이지 PDF 종합 리포트**로 매일 자동 발송해 주는 Python 자동화 시스템입니다.
 
 ---
 
-## ⚙️ 2. 로컬 실행 방법 (.env 설정)
+## 🌟 주요 기능 (Key Features)
 
-1. 프로젝트 폴더의 `.env.example`을 복사하여 `.env` 파일 생성:
+### 1. 📖 구글 시트 동적 종목 연동 (`GOOGLE_SHEET_URL`)
+* 구글 시트에 작성된 A열(종목코드/티커), B열(사용자 지정 종목명), C열(메모 및 보유 전략)을 실시간으로 가져와 동적으로 리포트를 생성합니다.
+
+### 2. 🔍 네이버 증권 공식 한글 종목명 자동 추출
+* 네이버 증권 API를 연동하여 국내 주식/ETF 및 해외 주식의 **공식 한글 종목명**을 자동 추출합니다.
+* 알파벳과 숫자가 혼용된 국내 신종목코드(예: `0167B0`, `0219E0` 등)도 완벽하게 지원합니다.
+
+### 3. 📄 2페이지 가로형(Landscape A4) PDF 문서 자동 생성
+* **1페이지 (종합 시세 요약 표):**
+  * `종목코드` | `종목명(한글)` | `시가` | `종가` | `수익률` | `당일 변동 범위` | `메모 및 보유 전략` 7개 항목 정렬
+  * **종가 텍스트 색상 자동 반영:** 상승 마감(빨간색), 하락 마감(파란색), 보합(검은색)
+  * **수익률 아이콘 반영:** 상승(`🔺`), 하락(`🔵`), 보합(`🟡`)
+* **2페이지 (풀페이지 시각화 차트 그래프):**
+  * Matplotlib 기반 A4 가로 꽉 찬 대형 도식화 바 차트 생성 (`PageBreak` 전용 배치)
+  * 막대 그래픽 내부에 `(등락률%) 종가: ₩XX,XXX` 형태로 직관적 시세 라벨링 (상승: 빨간 막대 `#DC2626`, 하락: 파란 막대 `#2563EB`)
+
+### 4. 🚀 텔레그램 순차 발송
+* **[1st]** 📱 메인 HTML 브리핑 텍스트 메시지 먼저 발송
+* **[2nd]** 📄 PDF 요약 문서 파일(`주식_시세_요약표_YYYY-MM-DD.pdf`) 마지막 첨부 발송
+
+---
+
+## ⏰ 자동 실행 스케줄 (GitHub Actions)
+
+* **스케줄 시각:** 매일(월~일) 한국시간 오후 3시 40분 셋팅 (`cron: '40 6 * * *'`)
+  * *GitHub Actions 글로벌 대기열 병목을 고려하여 실제 메시지는 매일 한국시간 오후 4시 25분 ~ 4시 40분 사이(오후 4시 대)에 안정적으로 도착합니다.*
+* **필수 GitHub Secrets 환경변수:**
+  * `TELEGRAM_BOT_TOKEN`: 텔레그램 봇 토큰
+  * `TELEGRAM_CHAT_ID`: 발송 대상 텔레그램 Chat ID
+  * `GOOGLE_SHEET_URL`: 종목 목록이 작성된 구글 시트 URL
+
+---
+
+## 🛠️ 소스 코드 구조 및 함수 상세 (`stock_telegram_bot.py`)
+
+`stock_telegram_bot.py` 소스 코드는 분석하기 쉽도록 각 `def` 함수별로 상세한 주석(Docstring)이 작성되어 있습니다.
+
+| `def` 함수명 | 역할 및 설명 |
+| :--- | :--- |
+| **`ensure_korean_font()`** | PDF 및 차트 한글 깨짐 방지를 위해 Google Fonts(NanumGothic)에서 한글 TTF 폰트를 다운로드하고 시스템/ReportLab에 등록합니다. |
+| **`extract_sheet_id(url_or_id)`** | 입력된 구글 시트 URL 또는 ID 문자열에서 순수 구글 시트 식별자(Spreadsheet ID)를 추출합니다. |
+| **`normalize_ticker_symbol(symbol)`** | 국내 6자리 종목코드(신종목코드 포함) 뒤에 야후 파이낸스용 `.KS` 접미사를 자동으로 붙이고 대문자로 정규화합니다. |
+| **`normalize_display_symbol(symbol)`** | 텔레그램 및 PDF 표 출력용으로 `.KS` 접미사를 제거한 6자리 순수 종목코드를 반환합니다. (예: `441800.KS` ➡️ `441800`) |
+| **`fetch_naver_stock_name(symbol_or_code)`** | 네이버 증권 API를 호출하여 국내(신종목코드 포함) 및 해외 주식의 공식 한글 종목명을 추출합니다. |
+| **`fetch_tickers_from_google_sheet(...)`** | 연동된 구글 시트를 CSV 형식으로파싱하여 종목코드, 종목명, 매수전략 리스트를 구성합니다. |
+| **`get_stock_data(symbol)`** | `yfinance` API를 통해 시가, 고가, 저가, 종가, 등락률(%), 통화 단위 및 관련 최근 뉴스 2건을 수집합니다. |
+| **`generate_open_close_full_page_chart(...)`** | 수집된 시세를 바탕으로 PDF 2페이지 전용 풀페이지 대형 도식화 바 차트 이미지를 생성합니다. |
+| **`create_stock_pdf_report(...)`** | ReportLab 라이브러리를 사용하여 1페이지(종합 시세 요약 표) + 2페이지(풀페이지 차트)로 구성된 A4 가로 PDF 문서를 빌드합니다. |
+| **`format_telegram_message(stock_results)`** | 텔레그램 채팅창 전송용 HTML 포맷 브리핑 메시지를 생성합니다. |
+| **`send_telegram_message(...)`** | Telegram Bot API `sendMessage`를 호출하여 브리핑 HTML 텍스트 메시지를 발송합니다. |
+| **`send_telegram_document(...)`** | Telegram Bot API `sendDocument`를 호출하여 생성된 PDF 문서 파일(.pdf)을 발송합니다. |
+| **`main()`** | 전체 주식 브리핑 파이프라인(환경변수 검증 ➡️ 시트 파싱 ➡️ 시세 수집 ➡️ 메시지/PDF 생성 ➡️ 텔레그램 순차 전송 ➡️ Cleanup)을 총괄 실행합니다. |
+
+---
+
+## ⚙️ 로컬 테스트 및 실행 방법
+
+1. 프로젝트 폴더에 가상환경 준비 및 의존성 라이브러리 설치:
    ```bash
-   cp .env.example .env
+   pip install -r requirements.txt
    ```
-2. `.env` 파일 열고 자신의 토큰과 Chat ID 입력:
+2. `.env` 파일 작성:
    ```env
-   TELEGRAM_BOT_TOKEN=123456789:자신의_봇_토큰
-   TELEGRAM_CHAT_ID=123456789
+   TELEGRAM_BOT_TOKEN=8817351065:AAGo6DNWThSDMu_TSuoptxvLAzFXcnrsexM
+   TELEGRAM_CHAT_ID=8867049701
+   GOOGLE_SHEET_URL=자신의_구글시트_URL
    ```
-3. 스크립트 실행:
+3. 로컬 테스트 실행:
    ```bash
-   .venv/bin/python stock_telegram_bot.py
+   python stock_telegram_bot.py --test
    ```
-
----
-
-## ⏰ 3. 자동 실행 방법 (2가지 중 선택)
-
-### 방법 A: GitHub Actions 사용 (추천 - PC 켜둘 필요 없음, 100% 무료)
-1. 이 프로젝트를 GitHub 레포지토리에 커밋 & 푸시합니다.
-2. GitHub 레포지토리 Settings -> `Secrets and variables` -> `Actions` 클릭
-3. `New repository secret` 버튼을 눌러 다음 2개 등록:
-   - `TELEGRAM_BOT_TOKEN`: 봇 토큰 값
-   - `TELEGRAM_CHAT_ID`: 텔레그램 Chat ID 값
-4. 매일 미국 장 마감 후(한국시간 평일 오전 6시)에 텔레그램 메시지가 자동으로 발송됩니다.
-
-### 방법 B: Mac crontab 사용 (내 컴퓨터에서 자동 실행)
-터미널에서 `crontab -e` 명령어를 실행하고 아래 줄을 추가합니다 (평일 오전 6시 실행예시):
-```bash
-0 6 * * 1-5 /Users/orangeheim/Library/CloudStorage/GoogleDrive-qntjd201@gmail.com/내\ 드라이브/workspace/scheduleTask/.venv/bin/python /Users/orangeheim/Library/CloudStorage/GoogleDrive-qntjd201@gmail.com/내\ 드라이브/workspace/scheduleTask/stock_telegram_bot.py
-```
