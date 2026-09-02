@@ -2,8 +2,9 @@ name: Daily Stock Telegram Report
 
 on:
   schedule:
-    # 매일(월~일) 한국시간 오후 3시 30분 (UTC 06:30) 1회 실행
-    - cron: '30 6 * * *'
+    # 매일(월~일) 한국시간 오후 3시 40분 (UTC 06:40) 설정
+    # (GitHub Actions 서버 큐 지연을 감안하여 오후 4시 25분~40분 사이에 전송되도록 최적화)
+    - cron: '40 6 * * *'
   workflow_dispatch: # 수동 실행 버튼 추가
 
 jobs:
