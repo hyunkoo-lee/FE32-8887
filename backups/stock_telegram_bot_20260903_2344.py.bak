@@ -2,11 +2,9 @@ import os
 import sys
 import csv
 import io
-import math
 import tempfile
 import datetime
 import requests
-import numpy as np
 import yfinance as yf
 from dotenv import load_dotenv
 
@@ -314,10 +312,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     """
     [PDF 2페이지 풀페이지 도식화 차트 생성 함수]
     Matplotlib을 사용하여 A4 가로 한 페이지를 꽉 채우는 대형 가로 바 차트를 작성합니다.
-    - 기준점(0%)을 화면 정확히 중앙에 배치
-    - 기본 표시 범위: -10% ~ +10% (10% 초과 종목 존재 시 정수 단위 대칭 확장)
-    - 하단 수치 표기: 0.5% 단위 간격 (np.arange(-limit, limit + 0.001, 0.5))
-    - 막대 내부/외부에 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
+    막대 내부/외부에 등락률(%)과 종가만 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
     
     Args:
         stock_results (list[dict]): 종목별 시세 데이터 리스트
@@ -341,26 +336,15 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
 
     # 풀페이지 대형 바 차트 생성 (Landscape A4 너비/높이에 맞춤)
-    fig, ax = plt.subplots(figsize=(16, max(9.0, len(valid_items) * 0.5)))
+    fig, ax = plt.subplots(figsize=(15.5, max(8.5, len(valid_items) * 0.48)))
     bars = ax.barh(names, pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
 
-    # 1. 기준점 0을 화면 중앙에 대칭 배치 (기본 범위: -10% ~ +10%)
-    max_abs = max([abs(p) for p in pcts] + [10.0])
-    limit = max(10.0, math.ceil(max_abs))
-    ax.set_xlim(-limit, limit)
-
-    # 2. 하단 수치 표기 (0.5% 단위)
-    ticks = np.arange(-limit, limit + 0.001, 0.5)
-    tick_labels = [f"{x:.0f}%" if x.is_integer() else f"{x:.1f}%" for x in ticks]
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(tick_labels, fontsize=7.5, rotation=45)
-
-    # 기준선 (0%) 중앙 강조선
-    ax.axvline(0, color='#1E293B', linewidth=2.0, linestyle='-')
-    ax.set_xlabel('종목별 등락률 (%) [기준점: 0% 중앙 배치, 0.5% 단위 표기]', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프 (기본 -10% ~ +10% 대칭)', fontsize=18, fontweight='bold', pad=22)
+    ax.axvline(0, color='#475569', linewidth=1.5, linestyle='--')
+    ax.set_xlabel('종목별 등락률 (%)', fontsize=13, fontweight='bold', labelpad=14)
+    ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
     ax.tick_params(axis='y', labelsize=11)
+    ax.tick_params(axis='x', labelsize=11)
 
     # 요청 사항: 그래프에는 %율과 종가만 (순서: %, 종가 순) 표기
     for bar, item in zip(bars, valid_items):
@@ -377,9 +361,8 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
         price_text = f" ({width:+.2f}%) 종가: {close_str} "
 
         # 막대 너비에 따라 내부(Inside Bar) 또는 외부 텍스트 배치
-        threshold = limit * 0.08  # 상대적 임계값 (전체 범위의 8%)
         if width >= 0:
-            if width >= threshold:
+            if width >= 0.4:
                 ax.text(
                     width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -392,7 +375,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                 )
             else:
                 ax.text(
-                    width + (limit * 0.01), 
+                    width + 0.05, 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
@@ -403,7 +386,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     bbox=dict(boxstyle="round,pad=0.2", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
                 )
         else:
-            if abs(width) >= threshold:
+            if abs(width) >= 0.4:
                 ax.text(
                     width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -416,7 +399,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                 )
             else:
                 ax.text(
-                    width - (limit * 0.01), 
+                    width - 0.05, 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
