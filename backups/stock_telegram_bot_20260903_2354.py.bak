@@ -317,7 +317,6 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     - 고정 표시 범위: -5.0% ~ +5.0% (기준점 0% 정중앙 배치)
     - 하단 수치 표기: 0.2% 단위 간격 (np.arange(-5.0, 5.001, 0.2))
     - ±5% 초과/미만 종목은 막대 길이를 ±5%에 고정(clamping)하되, 텍스트 라벨에는 실제 등락률(%)을 표기
-    - 막대 길이(너비)가 텍스트 라벨 크기(약 1.35% 미만)보다 작은 경우 텍스트를 막대 바깥(Outside)에 배치
     - 막대 내부/외부에 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
     
     Args:
@@ -371,10 +370,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
     ax.tick_params(axis='y', labelsize=11)
 
-    # 3. 텍스트 라벨 표기 (실제 % 표기 & 막대 길이와 텍스트 크기 비교 후 내부/외부 자동 배치)
-    # 전체 범위가 [-5, 5] (총 10pt)이므로, 약 1.35% 미만의 막대 길이는 텍스트 폭이 더 크므로 외부에 표기
-    INSIDE_BAR_MIN_THRESHOLD = 1.35
-
+    # 3. 텍스트 라벨 표기 (실제 % 표기 및 클램핑 대응)
     for bar, actual_pct, item in zip(bars, actual_pcts, valid_items):
         bar_w = bar.get_width()  # 클램핑된 막대 너비 (-5.0 ~ 5.0)
         data = item['data']
@@ -389,9 +385,9 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
         # 실제 등락률(%)을 라벨로 표기
         price_text = f" ({actual_pct:+.2f}%) 종가: {close_str} "
 
-        # 막대 길이가 텍스트 폭보다 크면 내부(Inside), 작으면 외부(Outside) 표기
+        # 막대 내부(Inside Bar) 또는 외부 텍스트 배치
         if bar_w >= 0:
-            if bar_w >= INSIDE_BAR_MIN_THRESHOLD and bar_w < 4.8:
+            if bar_w >= 0.4 and bar_w < 4.8:
                 ax.text(
                     bar_w * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -413,7 +409,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            else:  # 막대 길이가 텍스트보다 작으면 외부에 표기
+            else:
                 ax.text(
                     bar_w + 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -426,7 +422,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     bbox=dict(boxstyle="round,pad=0.2", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
                 )
         else:
-            if abs(bar_w) >= INSIDE_BAR_MIN_THRESHOLD and abs(bar_w) < 4.8:
+            if abs(bar_w) >= 0.4 and abs(bar_w) < 4.8:
                 ax.text(
                     bar_w * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
@@ -448,7 +444,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            else:  # 막대 길이가 텍스트보다 작으면 외부에 표기
+            else:
                 ax.text(
                     bar_w - 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -852,7 +848,7 @@ def main():
     create_stock_pdf_report(results, latest_date, pdf_filepath)
 
     if is_dry_run:
-        print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습나다.")
+        print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습니다.")
         return
 
     print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] PDF 문서 파일")
