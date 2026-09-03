@@ -314,9 +314,9 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     """
     [PDF 2페이지 풀페이지 도식화 차트 생성 함수]
     Matplotlib을 사용하여 A4 가로 한 페이지를 꽉 채우는 대형 가로 바 차트를 작성합니다.
-    - 고정 표시 범위: -5.0% ~ +5.0% (기준점 0% 정중앙 배치)
-    - 하단 수치 표기: 0.2% 단위 간격 (np.arange(-5.0, 5.001, 0.2))
-    - ±5% 초과/미만 종목은 막대 길이를 ±5%에 고정(clamping)하되, 텍스트 라벨에는 실제 등락률(%)을 표기
+    - 기준점(0%)을 화면 정확히 중앙에 배치
+    - 기본 표시 범위: -10% ~ +10% (10% 초과 종목 존재 시 정수 단위 대칭 확장)
+    - 하단 수치 표기: 0.5% 단위 간격 (np.arange(-limit, limit + 0.001, 0.5))
     - 막대 내부/외부에 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
     
     Args:
@@ -337,44 +337,36 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
         return None
 
     names = [f"{r['name']} ({r.get('display_symbol', r['symbol'])})" for r in valid_items]
-    actual_pcts = [r['data']['change_pct'] for r in valid_items]
-    
-    # ±5% 초과/미만 시 막대 길이를 ±5.0%로 클램핑
-    clamped_pcts = [min(5.0, max(-5.0, p)) for p in actual_pcts]
-    colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in actual_pcts]
+    pcts = [r['data']['change_pct'] for r in valid_items]
+    colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in pcts]
 
     # 풀페이지 대형 바 차트 생성 (Landscape A4 너비/높이에 맞춤)
-    fig, ax = plt.subplots(figsize=(16.5, max(9.5, len(valid_items) * 0.52)))
-    bars = ax.barh(names, clamped_pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
+    fig, ax = plt.subplots(figsize=(16, max(9.0, len(valid_items) * 0.5)))
+    bars = ax.barh(names, pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
 
-    # 1. 표시 범위 고정: -5% ~ +5% (기준점 0% 정중앙 배치)
-    ax.set_xlim(-5.0, 5.0)
+    # 1. 기준점 0을 화면 중앙에 대칭 배치 (기본 범위: -10% ~ +10%)
+    max_abs = max([abs(p) for p in pcts] + [10.0])
+    limit = max(10.0, math.ceil(max_abs))
+    ax.set_xlim(-limit, limit)
 
-    # 2. 하단 수치 표기 (0.2% 단위 간격)
-    ticks = np.arange(-5.0, 5.001, 0.2)
-    tick_labels = []
-    for x in ticks:
-        rx = round(x, 2)
-        if abs(rx - round(rx)) < 1e-5:
-            tick_labels.append(f"{int(round(rx))}%")
-        else:
-            tick_labels.append(f"{rx:.1f}%")
-
+    # 2. 하단 수치 표기 (0.5% 단위)
+    ticks = np.arange(-limit, limit + 0.001, 0.5)
+    tick_labels = [f"{x:.0f}%" if x.is_integer() else f"{x:.1f}%" for x in ticks]
     ax.set_xticks(ticks)
-    ax.set_xticklabels(tick_labels, fontsize=6.5, rotation=60)
+    ax.set_xticklabels(tick_labels, fontsize=7.5, rotation=45)
 
     # 기준선 (0%) 중앙 강조선
     ax.axvline(0, color='#1E293B', linewidth=2.0, linestyle='-')
-    ax.set_xlabel('종목별 등락률 (%) [표시 범위: -5% ~ +5% 고정, 0.2% 단위 표기]', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프 (-5% ~ +5% 고정, ±5% 초과 시 실제 % 표기)', fontsize=18, fontweight='bold', pad=22)
+    ax.set_xlabel('종목별 등락률 (%) [기준점: 0% 중앙 배치, 0.5% 단위 표기]', fontsize=13, fontweight='bold', labelpad=14)
+    ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프 (기본 -10% ~ +10% 대칭)', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
     ax.tick_params(axis='y', labelsize=11)
 
-    # 3. 텍스트 라벨 표기 (실제 % 표기 및 클램핑 대응)
-    for bar, actual_pct, item in zip(bars, actual_pcts, valid_items):
-        bar_w = bar.get_width()  # 클램핑된 막대 너비 (-5.0 ~ 5.0)
+    # 요청 사항: 그래프에는 %율과 종가만 (순서: %, 종가 순) 표기
+    for bar, item in zip(bars, valid_items):
+        width = bar.get_width()
         data = item['data']
-        curr = data.get("currency", "$")
+        curr = data.get('currency', '$')
         cl = data['close']
         
         if curr == '₩':
@@ -382,25 +374,14 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
         else:
             close_str = f"${cl:.2f}"
 
-        # 실제 등락률(%)을 라벨로 표기
-        price_text = f" ({actual_pct:+.2f}%) 종가: {close_str} "
+        price_text = f" ({width:+.2f}%) 종가: {close_str} "
 
-        # 막대 내부(Inside Bar) 또는 외부 텍스트 배치
-        if bar_w >= 0:
-            if bar_w >= 0.4 and bar_w < 4.8:
+        # 막대 너비에 따라 내부(Inside Bar) 또는 외부 텍스트 배치
+        threshold = limit * 0.08  # 상대적 임계값 (전체 범위의 8%)
+        if width >= 0:
+            if width >= threshold:
                 ax.text(
-                    bar_w * 0.96, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='right', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#FFFFFF'
-                )
-            elif bar_w >= 4.8:  # +5% 이상 클램핑 시 오른쪽에 하얀 글씨로 안정적 표시
-                ax.text(
-                    4.9, 
+                    width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
@@ -411,7 +392,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                 )
             else:
                 ax.text(
-                    bar_w + 0.05, 
+                    width + (limit * 0.01), 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
@@ -422,20 +403,9 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     bbox=dict(boxstyle="round,pad=0.2", fc="#F8FAFC", ec="#CBD5E1", lw=0.6)
                 )
         else:
-            if abs(bar_w) >= 0.4 and abs(bar_w) < 4.8:
+            if abs(width) >= threshold:
                 ax.text(
-                    bar_w * 0.96, 
-                    bar.get_y() + bar.get_height()/2, 
-                    price_text, 
-                    va='center', 
-                    ha='left', 
-                    fontsize=10, 
-                    fontweight='bold', 
-                    color='#FFFFFF'
-                )
-            elif abs(bar_w) >= 4.8:  # -5% 이하 클램핑 시 왼쪽에 하얀 글씨로 안정적 표시
-                ax.text(
-                    -4.9, 
+                    width * 0.96, 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
@@ -446,7 +416,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                 )
             else:
                 ax.text(
-                    bar_w - 0.05, 
+                    width - (limit * 0.01), 
                     bar.get_y() + bar.get_height()/2, 
                     price_text, 
                     va='center', 
