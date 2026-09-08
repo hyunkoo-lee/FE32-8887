@@ -189,90 +189,40 @@ def fetch_naver_stock_name(symbol_or_code):
 def fetch_tickers_from_google_sheet(sheet_url_or_id):
     """
     [구글 시트 종목 목록 파싱 함수]
-    연동된 구글 시트(GOOGLE_SHEET_URL)를 GViz CSV 형식으로 읽어와 유효한 보유/관심 종목을 추출합니다.
-    - 헤더 감지: '종목코드'(N열), '종목'(E열), '수량'(G열) 동적 위치 탐색
-    - 필터링: 실보유 수량(qty > 0)이 있거나 종목명에 '*'가 포함된 유효 종목 추출 (예수금, 부동산 등 제외)
-    - 네이버 증권(https://finance.naver.com/) 연동을 통해 공식 한글 종목명 우선 매핑
+    연동된 구글 시트를 CSV 형식으로 읽어와 A열(종목코드), B열(종목명), C열(매수전략/메모)을 파싱합니다.
     """
-    if not sheet_url_or_id:
+    sheet_id = extract_sheet_id(sheet_url_or_id)
+    if not sheet_id:
         return []
 
-    target_url = get_holdings_gviz_csv_url(sheet_url_or_id)
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     try:
-        res = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        res = requests.get(csv_url, timeout=10)
         if res.status_code != 200:
             print(f"⚠️ 구글 시트 불러오기 실패 (HTTP {res.status_code})")
             return []
 
-        reader = list(csv.reader(io.StringIO(res.text)))
-        if not reader:
-            return []
-
-        header = reader[0]
-        code_idx = None
-        name_idx = None
-        qty_idx = None
-        strategy_idx = None
-
-        # 1. 헤더에서 컬럼 인덱스 자동 탐색
-        for idx, col in enumerate(header):
-            col_clean = col.strip()
-            if any(k in col_clean for k in ['종목코드', '티커', 'TICKER', 'SYMBOL']):
-                code_idx = idx
-            elif col_clean in ['종목', '종목명', 'NAME']:
-                name_idx = idx
-            elif '수량' in col_clean:
-                qty_idx = idx
-            elif any(k in col_clean for k in ['메모', '전략', 'STRATEGY']):
-                strategy_idx = idx
-
-        # 컬럼 인덱스 fallback 설정
-        if code_idx is None:
-            code_idx = 13 if len(header) > 13 else 0
-        if name_idx is None:
-            name_idx = 4 if len(header) > 4 else 1
-        if qty_idx is None and len(header) >= 10:
-            qty_idx = 6
-
-        is_multi_asset_sheet = (len(header) >= 10)
-
-        seen = set()
+        csv_text = res.content.decode('utf-8')
+        reader = csv.reader(io.StringIO(csv_text))
+        
         tickers = []
-
-        for row in reader[1:]:
-            if len(row) <= code_idx:
+        for row in reader:
+            if not row or len(row) == 0:
                 continue
-            raw_symbol = row[code_idx].strip()
-            if not raw_symbol or raw_symbol.upper() in ["SYMBOL", "TICKER", "티커", "종목코드", "종목", "CODE"]:
-                continue
-            if raw_symbol in ['예수금', '부동산', '현금', '정기예금', 'KRX금현물', '소유', '합계']:
-                continue
-
-            sheet_name = row[name_idx].strip() if len(row) > name_idx else ""
+            raw_symbol = row[0].strip()
             
-            # 다중 자산 시트인 경우 보유수량 > 0 이거나 종목명에 '*' 포함된 경우만 채택
-            if is_multi_asset_sheet and qty_idx is not None and len(row) > qty_idx:
-                qty_str = row[qty_idx].replace(',', '').strip()
-                try:
-                    qty = float(qty_str) if qty_str else 0.0
-                except Exception:
-                    qty = 0.0
-                if qty <= 0 and '*' not in sheet_name:
-                    continue
+            if raw_symbol.upper() in ["SYMBOL", "TICKER", "티커", "종목코드", "종목"]:
+                continue
+            
+            if not raw_symbol:
+                continue
 
             symbol = normalize_ticker_symbol(raw_symbol)
-            if symbol in seen:
-                continue
-            seen.add(symbol)
+            sheet_name = row[1].strip() if len(row) > 1 and row[1].strip() else None
+            strategy = row[2].strip() if len(row) > 2 and row[2].strip() else "지정된 메모 없음"
 
-            strategy = "지정된 메모 없음"
-            if strategy_idx is not None and len(row) > strategy_idx and row[strategy_idx].strip():
-                strategy = row[strategy_idx].strip()
-
-            # 네이버 증권 공식 한글 종목명 조회
-            clean_sheet_name = sheet_name.split('(')[0].replace('*', '').strip() if sheet_name else ""
             naver_name = fetch_naver_stock_name(symbol)
-            final_name = naver_name or clean_sheet_name or raw_symbol
+            final_name = naver_name or sheet_name or symbol
 
             tickers.append({
                 "symbol": symbol,
@@ -344,97 +294,11 @@ def fetch_portfolio_holdings_from_google_sheet(sheet_url_or_id=None):
         print(f"⚠️ 보유 계좌 구글 시트 파싱 실패: {e}")
         return []
 
-def get_stock_data_from_naver(clean_code):
-    """
-    [네이버 증권 API 기반 주가 데이터 수집 함수]
-    네이버 증권(https://finance.naver.com/) 모바일 API를 통해
-    국내 주식/ETF의 실시간/종가 시세(시가, 종가, 고가, 저가, 전일대비 등락률)를 수집합니다.
-    """
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    try:
-        # 1. basic API (종가, 등락률)
-        b_url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
-        b_res = requests.get(b_url, headers=headers, timeout=5)
-        if b_res.status_code != 200:
-            return None
-        b_data = b_res.json()
-        
-        close_str = str(b_data.get('closePrice', '')).replace(',', '').strip()
-        if not close_str:
-            return None
-        close_price = float(close_str)
-        change_pct = float(b_data.get('fluctuationsRatio', 0.0))
-        
-        # 2. integration API (시가, 고가, 저가 등)
-        i_url = f"https://m.stock.naver.com/api/stock/{clean_code}/integration"
-        i_res = requests.get(i_url, headers=headers, timeout=5)
-        
-        open_price = close_price
-        high_price = close_price
-        low_price = close_price
-        volume = 0
-        
-        if i_res.status_code == 200:
-            i_data = i_res.json()
-            total_infos = {item.get('key'): item.get('value') for item in i_data.get('totalInfos', [])}
-            
-            o_str = total_infos.get('시가', '').replace(',', '').strip()
-            h_str = total_infos.get('고가', '').replace(',', '').strip()
-            l_str = total_infos.get('저가', '').replace(',', '').strip()
-            v_str = total_infos.get('거래량', '').replace(',', '').strip()
-            
-            if o_str:
-                try:
-                    open_price = float(o_str)
-                except Exception:
-                    pass
-            if h_str:
-                try:
-                    high_price = float(h_str)
-                except Exception:
-                    pass
-            if l_str:
-                try:
-                    low_price = float(l_str)
-                except Exception:
-                    pass
-            if v_str:
-                try:
-                    volume = int(float(v_str))
-                except Exception:
-                    pass
-
-        today_str = datetime.date.today().strftime('%Y-%m-%d')
-        return {
-            "date": today_str,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price,
-            "change_pct": change_pct,
-            "volume": volume,
-            "currency": "₩",
-            "news": []
-        }
-    except Exception as e:
-        print(f"⚠️ 네이버 증권 {clean_code} 조회 실패: {e}")
-        return None
-
 def get_stock_data(symbol):
     """
     [주가 시세 및 뉴스 수집 함수]
-    1. 국내 주식/ETF: 네이버 증권(https://finance.naver.com/) API 최우선 조회
-    2. 해외 주식 또는 네이버 미지원 종목: yfinance 라이브러리 보완 조회
+    yfinance 라이브러리를 이용해 시가, 고가, 저가, 종가, 등락률(%), 통화 단위 및 최근 뉴스 수집
     """
-    clean_code = symbol.replace('.KS', '').replace('.KQ', '').strip()
-    
-    # 1. 국내 6자리 종목코드: 네이버 증권 최우선 조회
-    if len(clean_code) == 6 and clean_code.isalnum() and not clean_code.isalpha():
-        naver_data = get_stock_data_from_naver(clean_code)
-        if naver_data:
-            return naver_data
-
-    # 2. 해외 주식 또는 네이버 조회 실패 시 yfinance 조회
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="5d")
@@ -1165,7 +1029,7 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
     elements.append(dual_table)
 
     doc.build(elements)
-    print(f"📄 PDF 리포트 생성 완료 (총 5페이지): {pdf_filepath}")
+    print(f"📄 PDF 리포트 생성 완료 (총 4페이지): {pdf_filepath}")
 
 def format_telegram_message(stock_results):
     """[텔레그램 브리핑 메시지 포맷팅 함수]"""
@@ -1182,7 +1046,7 @@ def format_telegram_message(stock_results):
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n"
-    msg += f"📎 <i>시세 요약표, 등락률 차트, 소유주별 전체 평가금 차트 및 월간 일별 평가금 관리 표는 첨부된 5페이지 종합 PDF 리포트로 확인하실 수 있습니다.</i>\n\n"
+    msg += f"📎 <i>시세 표, 등락률 차트, 소유주별 전체 평가금 차트 및 월간 일별 평가금 관리 표는 첨부된 4페이지 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
 
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
@@ -1298,7 +1162,7 @@ def main():
 
     report_msg, latest_date = format_telegram_message(results)
 
-    # 1. 5페이지 PDF 리포트 파일 생성
+    # 1. 4페이지 PDF 리포트 파일 생성
     pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
     pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
     create_stock_pdf_report(results, holdings, latest_date, pdf_filepath)
@@ -1307,7 +1171,7 @@ def main():
         print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습니다.")
         return
 
-    print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] 5페이지 PDF 문서 파일")
+    print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] 4페이지 PDF 문서 파일")
 
     # 1. 메인 브리핑 메시지 먼저 전송
     msg_res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report_msg)
@@ -1319,12 +1183,12 @@ def main():
         TELEGRAM_CHAT_ID, 
         pdf_filepath, 
         pdf_filename, 
-        caption=f"<b>📄 주식 시세 요약, 등락률 차트, 소유주별 전체 평가금 차트 및 월간 관리 표 5페이지 PDF 문서 ({latest_date})</b>"
+        caption=f"<b>📄 주식 시세 요약, 등락률 차트, 소유주별 전체 평가금 차트 및 월간 관리 표 4페이지 PDF 문서 ({latest_date})</b>"
     )
     print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
     if msg_res.get("ok") and doc_res.get("ok"):
-        print("✅ 텔레그램 메세지 및 5페이지 PDF 전송 완벽 성공!")
+        print("✅ 텔레그램 메세지 및 4페이지 PDF 전송 완벽 성공!")
     else:
         print(f"⚠️ 전송 결과: 메시지={msg_res.get('ok')}, PDF={doc_res.get('ok')}")
 
