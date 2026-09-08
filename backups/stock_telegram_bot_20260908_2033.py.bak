@@ -3,10 +3,8 @@ import sys
 import csv
 import io
 import math
-import json
 import tempfile
 import datetime
-import calendar
 import requests
 import numpy as np
 import yfinance as yf
@@ -30,12 +28,6 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
-
-# 보유 계좌 구글 시트 URL (총계좌 관리 시트, GID: 312482996)
-HOLDINGS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MsOdBxl6fG9uL9K_SwqjYkjlcqvBm9qI0ZJ5ITTz-0Q/gviz/tq?tqx=out:csv&gid=312482996"
-
-# 일별 자산 평가금 이력 저장 파일 경로
-VALUATION_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "data", "monthly_valuation_history.json")
 
 # 기본 설정 종목 목록 (구글 시트 미연동 또는 데이터 부재 시 백업용)
 DEFAULT_TARGET_TICKERS = [
@@ -103,6 +95,12 @@ def extract_sheet_id(url_or_id):
     [구글 시트 ID 추출 함수]
     사용자가 입력한 전체 구글 시트 URL(https://docs.google.com/spreadsheets/d/.../edit) 또는
     순수 시트 ID 문자열에서 구글 시트 식별자(Spreadsheet ID)만 추출하여 반환합니다.
+    
+    Args:
+        url_or_id (str): 구글 시트 URL 또는 시트 ID
+        
+    Returns:
+        str or None: 추출된 구글 시트 ID
     """
     if not url_or_id:
         return None
@@ -118,11 +116,18 @@ def normalize_ticker_symbol(symbol):
     입력된 종목코드를 야후 파이낸스(yfinance) 조회가 가능한 형태로 정규화합니다.
     - 국내 6자리 종목코드(알파벳+숫자 혼용 신종목코드 포함, 예: 441800, 0167B0, 0219E0 등) 뒤에 '.KS' 접미사 부착
     - 기존 '.KR' 접미사를 '.KS'로 변환 및 영문 대문자 정돈
+    
+    Args:
+        symbol (str): 입력 종목코드
+        
+    Returns:
+        str: 정규화된 야후 파이낸스 티커 symbol (예: '441800.KS', '0167B0.KS', 'SCHD')
     """
     symbol = symbol.strip().upper()
     if symbol.endswith(".KR"):
         symbol = symbol[:-3] + ".KS"
     elif len(symbol) == 6 and symbol.isalnum() and not symbol.isalpha():
+        # 6자리 알파벳/숫자 혼용 국내 종목코드 (0167B0, 0219E0 등)
         if not (symbol.endswith(".KS") or symbol.endswith(".KQ")):
             symbol = symbol + ".KS"
     return symbol
@@ -132,6 +137,12 @@ def normalize_display_symbol(symbol):
     [표시용 종목코드 정돈 함수]
     텔레그램 메시지 및 PDF 요약표에 깔끔하게 출력하기 위해
     야후 파이낸스용 접미사('.KS', '.KQ')를 제거한 6자리 순수 종목코드를 반환합니다.
+    
+    Args:
+        symbol (str): 야후 파이낸스 티커 symbol
+        
+    Returns:
+        str: 화면 표시용 종목코드 (예: '441800.KS' -> '441800')
     """
     if symbol.endswith(".KS") or symbol.endswith(".KQ"):
         return symbol[:-3]
@@ -142,10 +153,17 @@ def fetch_naver_stock_name(symbol_or_code):
     [네이버 증권 한글 종목명 조회 함수]
     네이버 증권 API(m.stock.naver.com & api.stock.naver.com)를 호출하여
     국내 주식/ETF(신종목코드 포함) 및 해외 주식의 공식 한글 종목명을 자동으로 가져옵니다.
+    
+    Args:
+        symbol_or_code (str): 종목코드 또는 티커
+        
+    Returns:
+        str or None: 네이버 증권에서 조회된 공식 한글 종목명 (조회 실패 시 None)
     """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     clean_code = symbol_or_code.replace('.KS', '').replace('.KQ', '').strip()
     
+    # 1. 국내 주식/ETF (6자리 숫자 및 알파벳 혼용 신종목코드 포함)
     if len(clean_code) == 6 and clean_code.isalnum():
         try:
             url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
@@ -157,6 +175,7 @@ def fetch_naver_stock_name(symbol_or_code):
         except Exception:
             pass
 
+    # 2. 해외 주식 (api.stock.naver.com)
     for suffix in ['.O', '.N', '.A', '']:
         try:
             url = f"https://api.stock.naver.com/stock/{clean_code}{suffix}/basic"
@@ -175,6 +194,12 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
     [구글 시트 종목 목록 파싱 함수]
     연동된 구글 시트를 CSV 형식으로 읽어와 A열(종목코드), B열(종목명), C열(매수전략/메모)을 파싱합니다.
     네이버 증권 API를 통해 최신 공식 한글 종목명을 우선 반영합니다.
+    
+    Args:
+        sheet_url_or_id (str): 구글 시트 URL 또는 ID
+        
+    Returns:
+        list[dict]: 파싱된 종목 정보 사전 리스트
     """
     sheet_id = extract_sheet_id(sheet_url_or_id)
     if not sheet_id:
@@ -223,62 +248,17 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
         print(f"⚠️ 구글 시트 읽기 중 오류 발생: {e}")
         return []
 
-def fetch_portfolio_holdings_from_google_sheet():
-    """
-    [보유 계좌 구글 시트 파싱 함수]
-    보유 계좌 시트(GID: 312482996) 데이터를 가져와
-    소유주(A열: 소유), 계좌(B열), 종목명(E열: 종목), 수량(G열), 평가금액(J열), 종목코드(N열)를 파싱합니다.
-    """
-    try:
-        res = requests.get(HOLDINGS_SHEET_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        if res.status_code != 200:
-            print(f"⚠️ 보유 계좌 구글 시트 불러오기 실패 (HTTP {res.status_code})")
-            return []
-
-        reader = list(csv.reader(io.StringIO(res.text)))
-        holdings = []
-        for r in reader[1:]:
-            if not r or len(r) < 14:
-                continue
-            owner = r[0].strip()
-            account = r[1].strip()
-            stock_name = r[4].strip()
-            qty_str = r[6].replace(',', '').strip()
-            eval_amt_str = r[9].replace('₩', '').replace(',', '').strip()
-            ticker = r[13].strip()
-            
-            if owner in ['합계', ''] or not stock_name:
-                continue
-                
-            try:
-                qty = float(qty_str) if qty_str else 0.0
-            except Exception:
-                qty = 0.0
-                
-            try:
-                eval_amt = float(eval_amt_str) if eval_amt_str else 0.0
-            except Exception:
-                eval_amt = 0.0
-                
-            if eval_amt > 0:
-                holdings.append({
-                    'owner': owner,
-                    'account': account,
-                    'stock_name': stock_name,
-                    'ticker': ticker,
-                    'qty': qty,
-                    'eval_amt': eval_amt
-                })
-        print(f"💼 보유 계좌 시트에서 총 {len(holdings)}개 실보유 자산 항목을 조회했습니다.")
-        return holdings
-    except Exception as e:
-        print(f"⚠️ 보유 계좌 구글 시트 파싱 실패: {e}")
-        return []
-
 def get_stock_data(symbol):
     """
     [주가 시세 및 뉴스 수집 함수]
-    yfinance 라이브러리를 이용해 해당 종목의 시가, 고가, 저가, 종가, 등락률(%), 통화 단위 및 최근 뉴스 2건 수집
+    yfinance 라이브러리를 이용해 해당 종목의 시가(Open), 고가(High), 저가(Low), 종가(Close),
+    전일 대비 등락률(%), 통화 단위 및 관련 최근 뉴스 2건을 수집합니다.
+    
+    Args:
+        symbol (str): 야후 파이낸스 티커 symbol
+        
+    Returns:
+        dict or None: 주가 데이터 사전 객체 (조회 실패 시 None)
     """
     try:
         ticker = yf.Ticker(symbol)
@@ -334,6 +314,18 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     """
     [PDF 2페이지 풀페이지 도식화 차트 생성 함수]
     Matplotlib을 사용하여 A4 가로 한 페이지를 꽉 채우는 대형 가로 바 차트를 작성합니다.
+    - 고정 표시 범위: -5.0% ~ +5.0% (기준점 0% 정중앙 배치)
+    - 하단 수치 표기: 0.2% 단위 간격 (np.arange(-5.0, 5.001, 0.2))
+    - ±5% 초과/미만 종목은 막대 길이를 ±5%에 고정(clamping)하되, 텍스트 라벨에는 실제 등락률(%)을 표기
+    - 막대 길이(너비)가 텍스트 라벨 크기(약 1.35% 미만)보다 작은 경우 텍스트를 막대 바깥(Outside)에 배치
+    - 막대 내부/외부에 '(등락률%) 종가: ₩XX,XXX' 형태로 시각화하여 고화질 이미지로 저장합니다.
+    
+    Args:
+        stock_results (list[dict]): 종목별 시세 데이터 리스트
+        chart_img_path (str): 저장할 이미지 파일 경로
+        
+    Returns:
+        str or None: 생성된 차트 이미지 파일 경로
     """
     font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
     if os.path.exists(font_path):
@@ -348,14 +340,18 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     names = [f"{r['name']} ({r.get('display_symbol', r['symbol'])})" for r in valid_items]
     actual_pcts = [r['data']['change_pct'] for r in valid_items]
     
+    # ±5% 초과/미만 시 막대 길이를 ±5.0%로 클램핑
     clamped_pcts = [min(5.0, max(-5.0, p)) for p in actual_pcts]
     colors_list = ['#DC2626' if p > 0 else ('#2563EB' if p < 0 else '#64748B') for p in actual_pcts]
 
+    # 풀페이지 대형 바 차트 생성 (Landscape A4 너비/높이에 맞춤)
     fig, ax = plt.subplots(figsize=(16.5, max(9.5, len(valid_items) * 0.52)))
     bars = ax.barh(names, clamped_pcts, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
 
+    # 1. 표시 범위 고정: -5% ~ +5% (기준점 0% 정중앙 배치)
     ax.set_xlim(-5.0, 5.0)
 
+    # 2. 하단 수치 표기 (0.2% 단위 간격)
     ticks = np.arange(-5.0, 5.001, 0.2)
     tick_labels = []
     for x in ticks:
@@ -368,16 +364,19 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     ax.set_xticks(ticks)
     ax.set_xticklabels(tick_labels, fontsize=6.5, rotation=60)
 
+    # 기준선 (0%) 중앙 강조선
     ax.axvline(0, color='#1E293B', linewidth=2.0, linestyle='-')
     ax.set_xlabel('종목별 등락률 (%) [표시 범위: -5% ~ +5% 고정, 0.2% 단위 표기]', fontsize=13, fontweight='bold', labelpad=14)
     ax.set_title('종목별 수익률 및 종가 변동 도식화 그래프 (-5% ~ +5% 고정, ±5% 초과 시 실제 % 표기)', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
     ax.tick_params(axis='y', labelsize=11)
 
+    # 3. 텍스트 라벨 표기 (실제 % 표기 & 막대 길이와 텍스트 크기 비교 후 내부/외부 자동 배치)
+    # 전체 범위가 [-5, 5] (총 10pt)이므로, 약 1.35% 미만의 막대 길이는 텍스트 폭이 더 크므로 외부에 표기
     INSIDE_BAR_MIN_THRESHOLD = 1.35
 
     for bar, actual_pct, item in zip(bars, actual_pcts, valid_items):
-        bar_w = bar.get_width()
+        bar_w = bar.get_width()  # 클램핑된 막대 너비 (-5.0 ~ 5.0)
         data = item['data']
         curr = data.get("currency", "$")
         cl = data['close']
@@ -387,8 +386,10 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
         else:
             close_str = f"${cl:.2f}"
 
+        # 실제 등락률(%)을 라벨로 표기
         price_text = f" ({actual_pct:+.2f}%) 종가: {close_str} "
 
+        # 막대 길이가 텍스트 폭보다 크면 내부(Inside), 작으면 외부(Outside) 표기
         if bar_w >= 0:
             if bar_w >= INSIDE_BAR_MIN_THRESHOLD and bar_w < 4.8:
                 ax.text(
@@ -401,7 +402,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            elif bar_w >= 4.8:
+            elif bar_w >= 4.8:  # +5% 이상 클램핑 시 오른쪽에 하얀 글씨로 안정적 표시
                 ax.text(
                     4.9, 
                     bar.get_y() + bar.get_height()/2, 
@@ -412,7 +413,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            else:
+            else:  # 막대 길이가 텍스트보다 작으면 외부에 표기
                 ax.text(
                     bar_w + 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -436,7 +437,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            elif abs(bar_w) >= 4.8:
+            elif abs(bar_w) >= 4.8:  # -5% 이하 클램핑 시 왼쪽에 하얀 글씨로 안정적 표시
                 ax.text(
                     -4.9, 
                     bar.get_y() + bar.get_height()/2, 
@@ -447,7 +448,7 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
                     fontweight='bold', 
                     color='#FFFFFF'
                 )
-            else:
+            else:  # 막대 길이가 텍스트보다 작으면 외부에 표기
                 ax.text(
                     bar_w - 0.05, 
                     bar.get_y() + bar.get_height()/2, 
@@ -465,190 +466,21 @@ def generate_open_close_full_page_chart(stock_results, chart_img_path):
     plt.close()
     return chart_img_path
 
-def generate_owner_evaluation_chart(holdings, chart_img_path):
+def create_stock_pdf_report(stock_results, latest_date, pdf_filepath):
     """
-    [PDF 3페이지 신규 함수]
-    소유주별, 종목별 평가금액 현황 도식화 차트 생성 (타입 1: 그룹 바 차트 + 자산 비중 도넛 파이 차트)
-    """
-    font_path = os.path.join(tempfile.gettempdir(), "NanumGothic.ttf")
-    if os.path.exists(font_path):
-        fm.fontManager.addfont(font_path)
-        plt.rc('font', family='NanumGothic')
-    plt.rcParams['axes.unicode_minus'] = False
-
-    if not holdings:
-        return None
-
-    # 소유주별 그룹화
-    holdings_by_owner = {}
-    for h in holdings:
-        o = h['owner']
-        if o not in holdings_by_owner:
-            holdings_by_owner[o] = []
-        holdings_by_owner[o].append(h)
-
-    # 평가금액 높은 순 정렬
-    for o in holdings_by_owner:
-        holdings_by_owner[o].sort(key=lambda x: x['eval_amt'], reverse=True)
-
-    owner_colors = {'현구': '#1E3A8A', '혜민': '#0D9488', '어머님': '#D97706'}
-    default_color = '#64748B'
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16.0, 9.0), gridspec_kw={'width_ratios': [2.2, 1.0]})
-
-    y_labels = []
-    vals = []
-    colors_list = []
-
-    for owner, items in holdings_by_owner.items():
-        # 상위 6개 종목 위주 차트 표기
-        for item in items[:6]:
-            disp_name = item['stock_name']
-            if len(disp_name) > 16:
-                disp_name = disp_name[:14] + ".."
-            y_labels.append(f"[{owner}] {disp_name}")
-            vals.append(item['eval_amt'] / 10000.0) # 만원 단위
-            colors_list.append(owner_colors.get(owner, default_color))
-
-    # Reverse for top-to-bottom bar order
-    y_labels.reverse()
-    vals.reverse()
-    colors_list.reverse()
-
-    bars = ax1.barh(y_labels, vals, color=colors_list, height=0.62, edgecolor='#1E293B', linewidth=0.8)
-    ax1.set_xlabel('평가금액 (단위: 만원)', fontsize=12, fontweight='bold', labelpad=12)
-    ax1.set_title('소유주별 / 종목별 주요 자산 평가금 현황', fontsize=17, fontweight='bold', pad=18)
-    ax1.grid(axis='x', linestyle=':', alpha=0.5, color='#CBD5E1')
-    ax1.tick_params(axis='y', labelsize=10)
-
-    max_val = max(vals) if vals else 100
-    ax1.set_xlim(0, max_val * 1.25)
-
-    for bar in bars:
-        w = bar.get_width()
-        ax1.text(
-            w + (max_val * 0.015), 
-            bar.get_y() + bar.get_height()/2, 
-            f"₩{w:,.0f}만", 
-            va='center', 
-            ha='left', 
-            fontsize=9.5, 
-            fontweight='bold',
-            color='#0F172A'
-        )
-
-    # 우측 소유주별 총 자산 비중 도넛 차트
-    owner_totals = {o: sum(h['eval_amt'] for h in items) for o, items in holdings_by_owner.items()}
-    pie_labels = [f"{o}\n(₩{v/10000:,.0f}만)" for o, v in owner_totals.items()]
-    pie_colors = [owner_colors.get(o, default_color) for o in owner_totals.keys()]
-
-    ax2.pie(
-        owner_totals.values(), 
-        labels=pie_labels,
-        autopct='%1.1f%%', 
-        colors=pie_colors,
-        startangle=140,
-        pctdistance=0.75,
-        textprops={'fontsize': 11, 'weight': 'bold'},
-        wedgeprops=dict(width=0.42, edgecolor='white', linewidth=2)
-    )
-    ax2.set_title('소유주별 총 자산 비중 (%)', fontsize=17, fontweight='bold', pad=18)
-
-    plt.tight_layout()
-    plt.savefig(chart_img_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    return chart_img_path
-
-def record_and_get_daily_valuation_history(today_date, current_total_eval):
-    """
-    [PDF 4페이지 신규 함수]
-    매일 실행될 때 당일 총 평가금 합계를 기록하고 당월 1일~말일 일별 평가금 관리 데이터를 파싱합니다.
-    """
-    os.makedirs(os.path.dirname(VALUATION_HISTORY_FILE), exist_ok=True)
+    [ReportLab PDF 리포트 문서 빌드 함수]
+    ReportLab 라이브러리를 사용하여 2페이지 구조의 가로형(Landscape A4) PDF 문서 파일(.pdf)을 생성합니다.
+    - 1페이지: 종목코드, 종목명, 시가, 종가, 수익률, 당일 변동 범위, 메모가 담긴 종합 시세 표
+    - 2페이지: 등락률(%)과 종가가 표기된 대형 풀페이지 시각화 차트 그래프
     
-    history = {}
-    if os.path.exists(VALUATION_HISTORY_FILE):
-        try:
-            with open(VALUATION_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        except Exception:
-            history = {}
-
-    if current_total_eval > 0:
-        history[today_date] = current_total_eval
-        try:
-            with open(VALUATION_HISTORY_FILE, 'w', encoding='utf-8') as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"⚠️ 일별 평가금 이력 저장 실패: {e}")
-
-    try:
-        curr_dt = datetime.datetime.strptime(today_date, "%Y-%m-%d").date()
-    except Exception:
-        curr_dt = datetime.date.today()
-
-    year, month = curr_dt.year, curr_dt.month
-    _, last_day = calendar.monthrange(year, month)
-    weekday_kor = ['월', '화', '수', '목', '금', '토', '일']
-
-    dates_in_month = [datetime.date(year, month, d) for d in range(1, last_day + 1)]
-    
-    table_rows = []
-    prev_val = None
-    
-    for dt in dates_in_month:
-        d_str = dt.strftime('%Y-%m-%d')
-        day_name = weekday_kor[dt.weekday()]
-        val = history.get(d_str)
-        
-        if val is not None:
-            if prev_val is None:
-                change_str = "-"
-                change_pct_str = "-"
-                color_type = "black"
-            else:
-                diff = val - prev_val
-                pct = (diff / prev_val) * 100 if prev_val > 0 else 0.0
-                if diff > 0:
-                    change_str = f"+₩{diff:,.0f}"
-                    change_pct_str = f"+{pct:.2f}%"
-                    color_type = "red" # 상승: 빨간색
-                elif diff < 0:
-                    change_str = f"-₩{abs(diff):,.0f}"
-                    change_pct_str = f"{pct:.2f}%"
-                    color_type = "blue" # 하락: 파란색
-                else:
-                    change_str = "₩0"
-                    change_pct_str = "0.00%"
-                    color_type = "black"
-            val_str = f"₩{val:,.0f}"
-            prev_val = val
-        else:
-            val_str = "-"
-            change_str = "-"
-            change_pct_str = "-"
-            color_type = "black"
-
-        table_rows.append({
-            "date_day": f"{dt.day}일 ({day_name})",
-            "val_str": val_str,
-            "change_str": change_str,
-            "change_pct_str": change_pct_str,
-            "color_type": color_type
-        })
-
-    return year, month, table_rows
-
-def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
-    """
-    [ReportLab 4페이지 PDF 리포트 생성 함수]
-    - 1페이지: 종목 시세 요약 표
-    - 2페이지: 종목별 등락률(%) 및 종가 도식화 차트
-    - 3페이지: 소유주별 / 종목별 자산 평가금 도식화 차트
-    - 4페이지: 매월 1일~말일 일별 자산 평가금 관리 표 (전일 대비 상승: 빨간색, 하락: 파란색)
+    Args:
+        stock_results (list[dict]): 종목별 시세 데이터 리스트
+        latest_date (str): 시세 기준 일자
+        pdf_filepath (str): 생성될 PDF 파일 경로
     """
     font_name, bold_font_name = ensure_korean_font()
     
+    # A4 가로 페이지 (너비 842pt, 높이 595pt)
     doc = SimpleDocTemplate(
         pdf_filepath,
         pagesize=landscape(A4),
@@ -739,7 +571,7 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
         textColor=colors.HexColor('#2563EB') # 파란색
     )
 
-    # --- Page 1: 종합 시세 요약 표 ---
+    # 순서: 종목코드, 종목명, 시가, 종가, 수익률, 당일 변동 범위, 메모 및 보유전략
     table_data = [
         [
             Paragraph('종목코드', hdr_style),
@@ -773,6 +605,7 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
                 close_str = f"${data['close']:.2f}"
                 range_str = f"${data['low']:.2f} ~ ${data['high']:.2f}"
 
+            # 종가 색상 규칙: 종가 > 시가 (빨간색), 종가 < 시가 (파란색), 종가 = 시가 (검은색)
             if close_price > open_price:
                 close_paragraph = Paragraph(close_str, cell_bold_plus)
             elif close_price < open_price:
@@ -780,6 +613,7 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
             else:
                 close_paragraph = Paragraph(close_str, cell_right)
 
+            # 수익률 색상 규칙: > 0 (빨간색), < 0 (파란색), = 0 (검은색)
             if pct > 0:
                 pct_str = f"+{pct:.2f}%"
                 pct_paragraph = Paragraph(pct_str, cell_bold_plus)
@@ -806,8 +640,10 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
             Paragraph(strategy, cell_left)
         ])
 
+    # 7개 컬럼 총 너비 = 792pt (Landscape A4 너비 842 - 여백 50)
     col_widths = [70, 170, 75, 75, 75, 125, 202]
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
     t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1E3A8A')),
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -818,105 +654,36 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
         ('BOTTOMPADDING', (0,0), (-1,-1), 7),
     ]))
 
+    # Page 1: 종합 시세 요약 표
     elements = [
-        Paragraph("📊 [주식 시가·종가 종합 시세 리포트]", title_style),
+        Paragraph(f"📊 [주식 시가·종가 종합 시세 리포트]", title_style),
         Paragraph(f"📅 <b>기준일자:</b> {latest_date} | <b>생성시각:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", sub_style),
         Spacer(1, 8),
         t
     ]
 
-    # --- Page 2: 종목별 수익률 차트 ---
+    # Page 2: %, 종가 순서 표기 풀페이지 도식화 차트
     chart_filepath = os.path.join(tempfile.gettempdir(), "stock_full_page_chart.png")
     if generate_open_close_full_page_chart(stock_results, chart_filepath) and os.path.exists(chart_filepath):
-        elements.append(PageBreak())
+        elements.append(PageBreak()) # 2페이지 전용 배치
         elements.append(Paragraph("<b>📈 [종목별 수익률 및 종가 변동 도식화 그래프]</b>", title_style))
         elements.append(Spacer(1, 8))
         elements.append(Image(chart_filepath, width=790, height=485))
 
-    # --- Page 3: 소유주별 / 종목별 평가금액 현황 도식화 차트 ---
-    if holdings:
-        owner_chart_filepath = os.path.join(tempfile.gettempdir(), "owner_evaluation_chart.png")
-        if generate_owner_evaluation_chart(holdings, owner_chart_filepath) and os.path.exists(owner_chart_filepath):
-            elements.append(PageBreak())
-            elements.append(Paragraph("<b>💼 [소유주별 / 종목별 자산 평가금 현황 도식화 차트]</b>", title_style))
-            elements.append(Spacer(1, 8))
-            elements.append(Image(owner_chart_filepath, width=790, height=485))
-
-    # --- Page 4: 매월 1일~말일 일별 평가금 관리 표 ---
-    current_total_eval = sum(h['eval_amt'] for h in holdings) if holdings else 0.0
-    year, month, month_rows = record_and_get_daily_valuation_history(latest_date, current_total_eval)
-
-    elements.append(PageBreak())
-    elements.append(Paragraph(f"<b>📅 [{year}년 {month}월 일별 자산 평가금 관리 표 (1일~말일)]</b>", title_style))
-    elements.append(Paragraph(f"<b>현재 총 자산 평가금:</b> ₩{current_total_eval:,.0f} | <i>전일 대비 상승: <font color='#DC2626'><b>빨간색</b></font>, 하락: <font color='#2563EB'><b>파란색</b></font></i>", sub_style))
-    elements.append(Spacer(1, 8))
-
-    # 1일~16일(좌측), 17일~말일(우측) 2-컬럼 나란히 배치
-    half = 16
-    left_rows = month_rows[:half]
-    right_rows = month_rows[half:]
-
-    tbl_hdr = [Paragraph('일자', hdr_style), Paragraph('당일 총 평가금', hdr_style), Paragraph('전일 대비 변동', hdr_style), Paragraph('등락률', hdr_style)]
-
-    def make_column_data(rows):
-        data = [tbl_hdr]
-        for r in rows:
-            if r['color_type'] == 'red':
-                val_p = Paragraph(r['val_str'], cell_bold_plus)
-                chg_p = Paragraph(r['change_str'], cell_bold_plus)
-                pct_p = Paragraph(r['change_pct_str'], cell_bold_plus)
-            elif r['color_type'] == 'blue':
-                val_p = Paragraph(r['val_str'], cell_bold_minus)
-                chg_p = Paragraph(r['change_str'], cell_bold_minus)
-                pct_p = Paragraph(r['change_pct_str'], cell_bold_minus)
-            else:
-                val_p = Paragraph(r['val_str'], cell_center)
-                chg_p = Paragraph(r['change_str'], cell_center)
-                pct_p = Paragraph(r['change_pct_str'], cell_center)
-            
-            data.append([
-                Paragraph(r['date_day'], cell_center),
-                val_p,
-                chg_p,
-                pct_p
-            ])
-        return data
-
-    left_data = make_column_data(left_rows)
-    right_data = make_column_data(right_rows)
-
-    sub_widths = [75, 110, 115, 80]
-    t_left = Table(left_data, colWidths=sub_widths)
-    t_right = Table(right_data, colWidths=sub_widths)
-
-    t_style = TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1E3A8A')),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
-        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#F8FAFC')]),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-    ])
-    t_left.setStyle(t_style)
-    t_right.setStyle(t_style)
-
-    # 2개 표를 1개 메인 표로 나란히 배치 (중간 여백 12pt 포함)
-    dual_table = Table([[t_left, Paragraph('', cell_center), t_right]], colWidths=[385, 20, 385])
-    dual_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('LEFTPADDING', (0,0), (-1,-1), 0),
-        ('RIGHTPADDING', (0,0), (-1,-1), 0),
-    ]))
-
-    elements.append(dual_table)
-
     doc.build(elements)
-    print(f"📄 PDF 리포트 생성 완료 (총 4페이지): {pdf_filepath}")
+    print(f"📄 PDF 리포트 생성 완료: {pdf_filepath}")
 
 def format_telegram_message(stock_results):
     """
     [텔레그램 브리핑 메시지 포맷팅 함수]
+    텔레그램 채팅창에 발송할 상세 카드 형태의 HTML 포맷 텍스트 메시지를 생성합니다.
+    수익률에 따라 빨간색 상승 삼각형(🔺), 파란색 동그라미(🔵), 노란색 동그라미(🟡) 아이콘을 적용합니다.
+    
+    Args:
+        stock_results (list[dict]): 종목별 시세 데이터 리스트
+        
+    Returns:
+        tuple: (HTML 메시지 문자열, 기준일자 문자열)
     """
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
@@ -931,7 +698,7 @@ def format_telegram_message(stock_results):
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n"
-    msg += f"📎 <i>시세 표, 등락률 차트, 소유주별 평가금 차트 및 월간 일별 평가금 관리 표는 첨부된 4페이지 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
+    msg += f"📎 <i>전체 시세 표 및 풀페이지 시가/종가 도식화 그래프는 아래 첨부된 PDF 문서로 확인하실 수 있습니다.</i>\n\n"
 
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
 
@@ -947,6 +714,10 @@ def format_telegram_message(stock_results):
             curr = data.get("currency", "$")
             pct = data['change_pct']
 
+            # 아이콘 규칙: 
+            #   플러스(+) = 빨강 삼각형 (🔺)
+            #   마이너스(-) = 파랑 동그라미 (🔵)
+            #   보합(0%) = 노랑 동그라미 (🟡)
             if pct > 0:
                 icon = "🔺"
             elif pct < 0:
@@ -977,7 +748,18 @@ def format_telegram_message(stock_results):
     return msg, latest_date
 
 def send_telegram_message(bot_token, chat_id, message):
-    """[텔레그램 텍스트 메시지 발송 API 함수]"""
+    """
+    [텔레그램 텍스트 메시지 발송 API 함수]
+    Telegram Bot API(sendMessage)를 호출하여 작성된 브리핑 HTML 메시지를 텔레그램으로 발송합니다.
+    
+    Args:
+        bot_token (str): 텔레그램 봇 토큰
+        chat_id (str): 대상 텔레그램 채팅방 ID
+        message (str): 발송할 HTML 메시지 텍스트
+        
+    Returns:
+        dict: 텔레그램 API 응답 JSON 객체
+    """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -989,7 +771,20 @@ def send_telegram_message(bot_token, chat_id, message):
     return response.json()
 
 def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None):
-    """[텔레그램 문서 파일(PDF) 첨부 발송 API 함수]"""
+    """
+    [텔레그램 문서 파일(PDF) 첨부 발송 API 함수]
+    Telegram Bot API(sendDocument)를 호출하여 생성된 PDF 리포트 파일(.pdf)을 텔레그램으로 발송합니다.
+    
+    Args:
+        bot_token (str): 텔레그램 봇 토큰
+        chat_id (str): 대상 텔레그램 채팅방 ID
+        file_path (str): 발송할 PDF 파일 경로
+        filename (str): 첨부 파일 표시 이름
+        caption (str, optional): 캡션 텍스트
+        
+    Returns:
+        dict: 텔레그램 API 응답 JSON 객체
+    """
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     data = {"chat_id": chat_id, "parse_mode": "HTML"}
     if caption:
@@ -1006,6 +801,13 @@ def send_telegram_document(bot_token, chat_id, file_path, filename, caption=None
 def main():
     """
     [프로그램 메인 실행 파이프라인 함수]
+    전체 주식 브리핑 자동화 파이프라인의 실행 흐름을 제어합니다:
+    1. 환경 변수 및 설정 검증
+    2. 구글 시트 / 기본 종목 파싱 및 네이버 증권 종목명 연동
+    3. 야후 파이낸스 주가 시세 및 관련 뉴스 수집
+    4. HTML 브리핑 메시지 포맷팅 및 PDF 문서 파일(1페이지 표, 2페이지 차트) 생성
+    5. 텔레그램 전송 (메시지 먼저 발송 ➡️ PDF 파일 마지막 발송)
+    6. 임시 파일 Cleanup 처리
     """
     is_dry_run = "--dry-run" in sys.argv or "--test" in sys.argv
 
@@ -1030,10 +832,7 @@ def main():
                 "strategy_summary": item['strategy_summary']
             })
 
-    print("💼 보유 계좌 구글 시트 데이터 조회 중...")
-    holdings = fetch_portfolio_holdings_from_google_sheet()
-
-    print(f"🔍 총 {len(target_tickers)}개 관심 종목 주가 데이터 조회 중...")
+    print(f"🔍 총 {len(target_tickers)}개 종목 데이터 조회 중...")
     results = []
     for item in target_tickers:
         data = get_stock_data(item['symbol'])
@@ -1047,36 +846,37 @@ def main():
 
     report_msg, latest_date = format_telegram_message(results)
 
-    # 1. 4페이지 PDF 리포트 파일 생성
+    # 1. PDF 리포트 파일 생성
     pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
     pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
-    create_stock_pdf_report(results, holdings, latest_date, pdf_filepath)
+    create_stock_pdf_report(results, latest_date, pdf_filepath)
 
     if is_dry_run:
-        print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습니다.")
+        print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습나다.")
         return
 
-    print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] 4페이지 PDF 문서 파일")
+    print("🚀 텔레그램 전송 순서: [1] 메인 브리핑 메시지 ➡️ [2] PDF 문서 파일")
 
-    # 1. 메인 브리핑 메시지 먼저 전송
+    # 1. 메인 브리핑 메시지 먼저 전송 (FIRST)
     msg_res = send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, report_msg)
     print(f"  • 메시지 전송 결과: {'성공' if msg_res.get('ok') else '실패'}")
 
-    # 2. PDF 요약 문서 파일 마지막으로 전송
+    # 2. PDF 요약 문서 파일 마지막으로 전송 (LAST)
     doc_res = send_telegram_document(
         TELEGRAM_BOT_TOKEN, 
         TELEGRAM_CHAT_ID, 
         pdf_filepath, 
         pdf_filename, 
-        caption=f"<b>📄 주식 시세 요약, 등락률 차트, 소유주별 평가금 차트 및 월간 관리 표 4페이지 PDF 문서 ({latest_date})</b>"
+        caption=f"<b>📄 주식 시세 요약 표 및 등락률/종가 도식화 PDF 문서 ({latest_date})</b>"
     )
     print(f"  • PDF 파일 전송 결과: {'성공' if doc_res.get('ok') else '실패'}")
 
     if msg_res.get("ok") and doc_res.get("ok"):
-        print("✅ 텔레그램 메세지 및 4페이지 PDF 전송 완벽 성공!")
+        print("✅ 텔레그램 메세지 및 PDF 전송 완벽 성공!")
     else:
         print(f"⚠️ 전송 결과: 메시지={msg_res.get('ok')}, PDF={doc_res.get('ok')}")
 
+    # 임시 PDF 파일 삭제
     if os.path.exists(pdf_filepath):
         os.remove(pdf_filepath)
 
