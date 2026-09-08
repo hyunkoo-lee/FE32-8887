@@ -259,6 +259,7 @@ def fetch_portfolio_holdings_from_google_sheet(sheet_url_or_id=None):
                 continue
             owner = r[0].strip()
             account = r[1].strip()
+            asset_type = r[2].strip() if len(r) > 2 else ''
             stock_name = r[4].strip()
             qty_str = r[6].replace(',', '').strip()
             eval_amt_str = r[9].replace('₩', '').replace(',', '').strip()
@@ -281,6 +282,7 @@ def fetch_portfolio_holdings_from_google_sheet(sheet_url_or_id=None):
                 holdings.append({
                     'owner': owner,
                     'account': account,
+                    'asset_type': asset_type,
                     'stock_name': stock_name,
                     'ticker': ticker,
                     'qty': qty,
@@ -534,14 +536,19 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
     colors_list = []
     decrease_flags = []
 
-    # 전체 N열 종목코드 보유 자산 항목 수집
+    # 전체 N열 종목코드 보유 자산 항목 수집 (소유주, 계좌, 종류별 각각 구분 표기)
     for owner, items in holdings_by_owner.items():
         items.sort(key=lambda x: x['eval_amt'], reverse=True)
         for item in items:
             disp_name = item['stock_name']
             if len(disp_name) > 13:
                 disp_name = disp_name[:11] + ".."
-            x_labels.append(f"[{owner}]\n{disp_name}")
+            acc = item.get('account', '')
+            atype = item.get('asset_type', '')
+            meta_parts = [p for p in [owner, acc, atype] if p]
+            meta_str = f"[{' | '.join(meta_parts)}]"
+            
+            x_labels.append(f"{meta_str}\n{disp_name}")
             vals.append(item['eval_amt'] / 10000.0) # 만원 단위
             colors_list.append(owner_colors.get(owner, default_color))
 
@@ -562,9 +569,9 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
 
     bars = ax.bar(range(len(vals)), vals, color=colors_list, width=0.72, edgecolor='#1E293B', linewidth=0.8)
     ax.set_xticks(range(len(vals)))
-    ax.set_xticklabels(x_labels, fontsize=8.5, rotation=65, ha='right')
+    ax.set_xticklabels(x_labels, fontsize=8.0, rotation=65, ha='right')
     ax.set_ylabel('평가금액 (단위: 만원)', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('소유주별 / 종목별 주식 평가금 현황 (N열 종목코드 보유 종목 표기, 하락 시 빨간색 ▼ 표기)', fontsize=18, fontweight='bold', pad=22)
+    ax.set_title('소유주별 / 계좌 / 종류별 주식 평가금 현황 (N열 종목코드 보유 종목, 하락 시 빨간색 ▼ 표기)', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='y', linestyle=':', alpha=0.5, color='#CBD5E1')
 
     max_val = max(vals) if vals else 100
