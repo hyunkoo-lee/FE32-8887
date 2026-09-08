@@ -63,7 +63,7 @@ GitHub Repository ➡️ **Settings** ➡️ **Secrets and variables** ➡️ **
 
 ## ⏰ 자동 실행 스케줄 (GitHub Actions)
 
-* **스케줄 시각:** 평일(월~금) 한국시간 오후 3시 30분 셋팅 (`cron: '30 6 * * 1-5'`)
+* **스케줄 시각:** 평일(월~금) 한국시간 오후 4시 40분 셋팅 (`cron: '40 7 * * 1-5'`)
 * **필수 GitHub Secrets 환경변수:**
   * `TELEGRAM_BOT_TOKEN`: 텔레그램 봇 토큰
   * `TELEGRAM_CHAT_ID`: 발송 대상 텔레그램 Chat ID
