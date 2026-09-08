@@ -486,7 +486,8 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
     """
     [PDF 3페이지 전용 풀페이지 도식화 차트 생성 함수]
     원형 차트를 제거하고 A4 가로 한 페이지 전체를 꽉 채우는 대형 세로 바 차트를 작성합니다.
-    - X축: 소유주별 / 종목별 전체 보유 자산
+    - 필터링: N열(종목코드)에 값이 존재하는 주식/ETF 자산만 표시
+    - X축: 소유주별 / 종목별 보유 주식 (N열 종목코드 보유 항목만 포함)
     - Y축: 평가금액 (단위: 만원)
     - 전일 대비 하락 종목: 막대 상단 라벨에 빨간색 하락 표기 (▼) 적용
     """
@@ -496,7 +497,10 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
         plt.rc('font', family='NanumGothic')
     plt.rcParams['axes.unicode_minus'] = False
 
-    if not holdings:
+    # N열(종목코드)에 값이 존재하는 항목만 필터링
+    valid_holdings = [h for h in (holdings or []) if h.get('ticker') and h['ticker'].strip() != '']
+
+    if not valid_holdings:
         return None
 
     # 주가 등락률 룩업 맵 작성
@@ -513,7 +517,7 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
 
     # 소유주별 그룹화
     holdings_by_owner = {}
-    for h in holdings:
+    for h in valid_holdings:
         o = h['owner']
         if o not in holdings_by_owner:
             holdings_by_owner[o] = []
@@ -530,7 +534,7 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
     colors_list = []
     decrease_flags = []
 
-    # 전체 보유 자산 항목 수집
+    # 전체 N열 종목코드 보유 자산 항목 수집
     for owner, items in holdings_by_owner.items():
         items.sort(key=lambda x: x['eval_amt'], reverse=True)
         for item in items:
@@ -546,7 +550,7 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
             norm_ticker = normalize_ticker_symbol(ticker) if ticker else ''
             
             change_pct = change_map.get(ticker, change_map.get(norm_ticker, None))
-            if change_pct is None and ticker and ticker not in ['종목코드', '소유', '합계']:
+            if change_pct is None and norm_ticker:
                 sd = get_stock_data(norm_ticker)
                 if sd:
                     change_pct = sd.get('change_pct', 0.0)
@@ -560,7 +564,7 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
     ax.set_xticks(range(len(vals)))
     ax.set_xticklabels(x_labels, fontsize=8.5, rotation=65, ha='right')
     ax.set_ylabel('평가금액 (단위: 만원)', fontsize=13, fontweight='bold', labelpad=14)
-    ax.set_title('소유주별 / 종목별 전체 자산 평가금 현황 (전일 대비 하락 종목: 빨간색 ▼ 체크 표기)', fontsize=18, fontweight='bold', pad=22)
+    ax.set_title('소유주별 / 종목별 주식 평가금 현황 (N열 종목코드 보유 종목 표기, 하락 시 빨간색 ▼ 표기)', fontsize=18, fontweight='bold', pad=22)
     ax.grid(axis='y', linestyle=':', alpha=0.5, color='#CBD5E1')
 
     max_val = max(vals) if vals else 100
@@ -678,7 +682,7 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
     [ReportLab 4페이지 PDF 리포트 생성 함수]
     - 1페이지: 종목 시세 요약 표
     - 2페이지: 종목별 등락률(%) 및 종가 도식화 차트
-    - 3페이지: 소유주별 / 종목별 전체 자산 평가금 풀페이지 도식화 차트
+    - 3페이지: 소유주별 / 종목별 전체 자산 평가금 풀페이지 도식화 차트 (N열 종목코드 보유 종목만)
     - 4페이지: 매월 1일~말일 일별 자산 평가금 관리 표
     """
     font_name, bold_font_name = ensure_korean_font()
