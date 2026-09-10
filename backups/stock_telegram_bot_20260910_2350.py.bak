@@ -199,7 +199,7 @@ def fetch_tickers_from_google_sheet(sheet_url_or_id):
 
     target_url = get_holdings_gviz_csv_url(sheet_url_or_id)
     try:
-        res = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+        res = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if res.status_code != 200:
             print(f"⚠️ 구글 시트 불러오기 실패 (HTTP {res.status_code})")
             return []
@@ -297,7 +297,7 @@ def fetch_portfolio_holdings_from_google_sheet(sheet_url_or_id=None):
     target_url = get_holdings_gviz_csv_url(sheet_url_or_id or HOLDINGS_SHEET_URL)
     try:
         print(f"📖 보유 계좌 구글 시트 조회 중... ({target_url})")
-        res = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+        res = requests.get(target_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if res.status_code != 200:
             print(f"⚠️ 보유 계좌 구글 시트 불러오기 실패 (HTTP {res.status_code})")
             return []
@@ -740,54 +740,10 @@ def generate_owner_evaluation_chart(holdings, chart_img_path, stock_results=None
     plt.close()
     return chart_img_path
 
-def get_prev_month_end_value(history, year, month):
-    """
-    [전월 말일 자산 평가금 탐색 함수]
-    현재 연/월의 직전 달(전월)의 말일 자산 평가금을 history에서 자동 탐색합니다.
-    - 예: 2026년 9월인 경우 2026-08-31 우선 탐색
-    - 만약 전월 말일이 없으면 전월 중 가장 마지막 날짜 탐색
-    - 전월 기록이 없는 경우 당월 1일 이전의 가장 최근 기록 탐색
-    - 1일 기준 데이터만 있는 경우 당월 1일 데이터를 전월 이월금으로 간주
-    """
-    if month == 1:
-        prev_year = year - 1
-        prev_month = 12
-    else:
-        prev_year = year
-        prev_month = month - 1
-
-    _, prev_last_day = calendar.monthrange(prev_year, prev_month)
-    target_date_str = f"{prev_year:04d}-{prev_month:02d}-{prev_last_day:02d}"
-
-    # 1. 전월 말일 정확한 날짜 확인
-    if target_date_str in history:
-        return history[target_date_str], f"{prev_month}월 말일"
-
-    # 2. 전월 중 가장 늦은 날짜 탐색
-    prev_month_prefix = f"{prev_year:04d}-{prev_month:02d}-"
-    prev_dates = sorted([d for d in history.keys() if d.startswith(prev_month_prefix)])
-    if prev_dates:
-        latest_prev_date = prev_dates[-1]
-        return history[latest_prev_date], f"{prev_month}월 말일({latest_prev_date})"
-
-    # 3. 당월 1일 이전의 전체 기록 중 가장 최신 날짜 탐색
-    earlier_dates = sorted([d for d in history.keys() if d < f"{year:04d}-{month:02d}-01"])
-    if earlier_dates:
-        latest_earlier = earlier_dates[-1]
-        return history[latest_earlier], f"전월말({latest_earlier})"
-
-    # 4. 히스토리에 당월 이전 기록이 없는 경우: 당월 1일 데이터를 기준(전월 이월금)으로 간주
-    first_day_str = f"{year:04d}-{month:02d}-01"
-    if first_day_str in history:
-        return history[first_day_str], f"{prev_month}월 말일"
-
-    return None, None
-
 def record_and_get_daily_valuation_history(today_date, current_total_eval):
     """
-    [PDF 5페이지 함수]
+    [PDF 4페이지 함수]
     매일 실행될 때 당일 총 평가금 합계를 기록하고 당월 1일~말일 일별 평가금 관리 데이터를 파싱합니다.
-    추가로 [현재금액 - 전월 말일 금액] 전월대비 수익/손실 요약 데이터를 산출합니다.
     """
     os.makedirs(os.path.dirname(VALUATION_HISTORY_FILE), exist_ok=True)
     
@@ -859,41 +815,10 @@ def record_and_get_daily_valuation_history(today_date, current_total_eval):
             "val_str": val_str,
             "change_str": change_str,
             "change_pct_str": change_pct_str,
-            "color_type": color_type,
-            "is_summary": False
+            "color_type": color_type
         })
 
-    # 전월 말일 자산 평가금 대비 현재 자산 손익 산출
-    prev_month_val, prev_month_label = get_prev_month_end_value(history, year, month)
-    prev_month_summary = None
-    if prev_month_val is not None and prev_month_val > 0 and current_total_eval > 0:
-        diff_from_prev_month = current_total_eval - prev_month_val
-        pct_from_prev_month = (diff_from_prev_month / prev_month_val) * 100
-        if diff_from_prev_month > 0:
-            change_str_pm = f"+₩{diff_from_prev_month:,.0f}"
-            pct_str_pm = f"+{pct_from_prev_month:.2f}%"
-            color_pm = "red"
-        elif diff_from_prev_month < 0:
-            change_str_pm = f"-₩{abs(diff_from_prev_month):,.0f}"
-            pct_str_pm = f"{pct_from_prev_month:.2f}%"
-            color_pm = "blue"
-        else:
-            change_str_pm = "₩0"
-            pct_str_pm = "0.00%"
-            color_pm = "black"
-
-        prev_month_summary = {
-            "date_day": "전월 말 대비",
-            "val_str": f"₩{current_total_eval:,.0f}",
-            "change_str": change_str_pm,
-            "change_pct_str": pct_str_pm,
-            "color_type": color_pm,
-            "prev_val": prev_month_val,
-            "prev_label": prev_month_label,
-            "is_summary": True
-        }
-
-    return year, month, table_rows, prev_month_summary
+    return year, month, table_rows
 
 def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
     """
@@ -1169,37 +1094,26 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
             elements.append(Spacer(1, 8))
             elements.append(Image(owner_chart_filepath, width=790, height=485))
 
-    # --- Page 5: 매월 1일~말일 일별 자산 평가금 관리 표 ---
+    # --- Page 4: 매월 1일~말일 일별 자산 평가금 관리 표 ---
     current_total_eval = sum(h['eval_amt'] for h in holdings) if holdings else 0.0
-    year, month, month_rows, prev_month_summary = record_and_get_daily_valuation_history(latest_date, current_total_eval)
+    year, month, month_rows = record_and_get_daily_valuation_history(latest_date, current_total_eval)
 
     elements.append(PageBreak())
     elements.append(Paragraph(f"<b>📅 [{year}년 {month}월 일별 자산 평가금 관리 표 (1일~말일)]</b>", title_style))
-    
-    sub_text = f"<b>현재 총 자산 평가금:</b> ₩{current_total_eval:,.0f} | <i>전일 대비 상승: <font color='#DC2626'><b>빨간색</b></font>, 하락: <font color='#2563EB'><b>파란색</b></font></i>"
-    if prev_month_summary:
-        c_tag = '#DC2626' if prev_month_summary['color_type'] == 'red' else ('#2563EB' if prev_month_summary['color_type'] == 'blue' else '#1E293B')
-        sub_text += f" | <b>전월({prev_month_summary.get('prev_label')}) 대비:</b> <font color='{c_tag}'><b>{prev_month_summary['change_str']} ({prev_month_summary['change_pct_str']})</b></font>"
-    elements.append(Paragraph(sub_text, sub_style))
+    elements.append(Paragraph(f"<b>현재 총 자산 평가금:</b> ₩{current_total_eval:,.0f} | <i>전일 대비 상승: <font color='#DC2626'><b>빨간색</b></font>, 하락: <font color='#2563EB'><b>파란색</b></font></i>", sub_style))
     elements.append(Spacer(1, 8))
 
     # 1일~16일(좌측), 17일~말일(우측) 2-컬럼 나란히 배치
     half = 16
-    left_rows = list(month_rows[:half])
-    right_rows = list(month_rows[half:])
-    
-    # 30일 또는 31일 다음 행에 [전월 말일 금액 - 현재금액] 요약 행 갱신 추가
-    if prev_month_summary:
-        right_rows.append(prev_month_summary)
+    left_rows = month_rows[:half]
+    right_rows = month_rows[half:]
 
     tbl_hdr = [Paragraph('일자', hdr_style), Paragraph('당일 총 평가금', hdr_style), Paragraph('전일 대비 변동', hdr_style), Paragraph('등락률', hdr_style)]
 
     def make_column_data(rows):
         data = [tbl_hdr]
         for r in rows:
-            is_sum = r.get('is_summary', False)
-            date_text = f"<b>{r['date_day']}</b>" if is_sum else r['date_day']
-            date_p = Paragraph(date_text, cell_p4_date)
+            date_p = Paragraph(r['date_day'], cell_p4_date)
 
             if r['color_type'] == 'red':
                 val_p = Paragraph(r['val_str'], cell_p4_num_right_red)
@@ -1241,14 +1155,6 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
     t_left.setStyle(t_style)
     t_right.setStyle(t_style)
 
-    # 우측 테이블의 전월 대비 요약 행(마지막 행) 강조 스타일
-    if prev_month_summary:
-        last_idx = len(right_data) - 1
-        t_right.setStyle(TableStyle([
-            ('BACKGROUND', (0, last_idx), (-1, last_idx), colors.HexColor('#F1F5F9')),
-            ('LINEABOVE', (0, last_idx), (-1, last_idx), 1.2, colors.HexColor('#475569')),
-        ]))
-
     dual_table = Table([[t_left, Paragraph('', cell_center), t_right]], colWidths=[385, 20, 385])
     dual_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -1260,9 +1166,8 @@ def create_stock_pdf_report(stock_results, holdings, latest_date, pdf_filepath):
 
     doc.build(elements)
     print(f"📄 PDF 리포트 생성 완료 (총 5페이지): {pdf_filepath}")
-    return prev_month_summary, current_total_eval
 
-def format_telegram_message(stock_results, prev_month_summary=None, current_total_eval=0.0):
+def format_telegram_message(stock_results):
     """[텔레그램 브리핑 메시지 포맷팅 함수]"""
     if not stock_results:
         return "데이터를 불러오는 데 실패했습니다."
@@ -1277,12 +1182,6 @@ def format_telegram_message(stock_results, prev_month_summary=None, current_tota
     
     msg = f"<b>📊 [주식 시가/종가 브리핑]</b>\n"
     msg += f"📅 기준일자: <code>{latest_date}</code>\n"
-    if current_total_eval > 0:
-        msg += f"💼 <b>총 자산 평가금:</b> ₩{current_total_eval:,.0f}"
-        if prev_month_summary:
-            icon_pm = "🔺" if prev_month_summary['color_type'] == 'red' else ("🔵" if prev_month_summary['color_type'] == 'blue' else "🟡")
-            msg += f" (전월말 대비: {icon_pm} <b>{prev_month_summary['change_str']}</b>, <b>{prev_month_summary['change_pct_str']}</b>)"
-        msg += "\n"
     msg += f"📎 <i>시세 요약표, 등락률 차트, 소유주별 전체 평가금 차트 및 월간 일별 평가금 관리 표는 첨부된 5페이지 종합 PDF 리포트로 확인하실 수 있습니다.</i>\n\n"
 
     msg += "<b>📋 종목별 상세 현황 및 메모</b>\n\n"
@@ -1397,21 +1296,12 @@ def main():
             "data": data
         })
 
-    # 1. 5페이지 PDF 리포트 파일 먼저 생성하여 전월말 요약 및 총평가금 추출
-    current_date = None
-    for r in results:
-        if r.get('data'):
-            current_date = r['data']['date']
-            break
-    if not current_date:
-        current_date = datetime.date.today().strftime('%Y-%m-%d')
+    report_msg, latest_date = format_telegram_message(results)
 
-    pdf_filename = f"주식_시세_요약표_{current_date}.pdf"
+    # 1. 5페이지 PDF 리포트 파일 생성
+    pdf_filename = f"주식_시세_요약표_{latest_date}.pdf"
     pdf_filepath = os.path.join(tempfile.gettempdir(), pdf_filename)
-    prev_month_summary, current_total_eval = create_stock_pdf_report(results, holdings, current_date, pdf_filepath)
-
-    # 2. 전월말 대비 요약이 포함된 텔레그램 브리핑 메시지 생성
-    report_msg, latest_date = format_telegram_message(results, prev_month_summary, current_total_eval)
+    create_stock_pdf_report(results, holdings, latest_date, pdf_filepath)
 
     if is_dry_run:
         print("🧪 Dry-run 모드입니다. 텔레그램 메시지 및 PDF를 실제로 전송하지 않았습니다.")
